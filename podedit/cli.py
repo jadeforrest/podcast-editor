@@ -84,7 +84,8 @@ def cmd_render(args) -> int:
     for label, path in (("intro", intro), ("outro", outro)):
         print(f"{label}: {path or 'none'}")
     out = rnd.render(ep, transcript, plan, layout=args.layout, camera=args.camera, intro=intro, outro=outro,
-                     cover=cover, fast=args.fast, min_shot=args.min_shot)
+                     cover=cover, fast=args.fast, min_shot=args.min_shot,
+                     normalize=not args.no_normalize)
     print(f"Done: {out}")
     return 0
 
@@ -144,6 +145,8 @@ def parser() -> argparse.ArgumentParser:
                    help="with --layout speaker: shortest time on one camera before switching (default 2)")
     p.add_argument("--no-intro", action="store_true")
     p.add_argument("--no-outro", action="store_true")
+    p.add_argument("--no-normalize", action="store_true",
+                   help="mix everyone at their recorded level instead of evening out their speech levels")
     p.add_argument("--fast", action="store_true", help="hardware encoder: much faster, somewhat larger/lower quality")
     p.set_defaults(func=cmd_render)
 

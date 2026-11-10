@@ -127,6 +127,7 @@ list that.
 | `render --min-shot 3` | With the default speaker layout: stay at least 3 s on a camera before switching (default 2) |
 | `render --layout side-by-side` | Show all cameras at once instead of switching to whoever is talking |
 | `render --camera alice` | Show only Alice's camera throughout |
+| `render --no-normalize` | Keep everyone at their recorded level instead of evening out their speech |
 | `render --fast` | Hardware H.264 encoder: several times faster, larger file, a little lower quality |
 | `transcribe --model mlx-community/whisper-large-v3-mlx` | Slower, sometimes more accurate model |
 | `transcribe --language ''` | Auto-detect the language (default `en`) |
@@ -150,8 +151,16 @@ list that.
   to an equal slice, ordered by file name. With one camera, or `--layout
   single`, that camera fills the frame throughout. Audio-only episodes show
   `cover.*` if present, otherwise black, at the intro's size or 1920×1080.
-- **Audio.** Every person's sound mixed at its recorded level, 48 kHz stereo,
-  AAC 256k. Each cut has a 5 ms fade so it doesn't click.
+- **Audio.** Everyone is evened out to the same speech level. Each person's
+  level is measured only while they are talking (their own transcript words,
+  so bleed and the other person's turns don't count), and their sound is
+  turned up or down to -20 dBFS (about -19 LUFS), by at most 24 dB. `render`
+  prints each person's measured level and gain. A lookahead limiter on the mix
+  then holds every peak under -1 dBFS, so a boosted laugh or cough never
+  clips, while normal speech passes through untouched. `--no-normalize` mixes
+  everyone at their recorded level instead (the limiter still applies). The
+  intro and outro keep their own levels. Output is 48 kHz stereo, AAC 256k.
+  Each cut has a 5 ms fade so it doesn't click.
 - **Quality.** H.264 at CRF 18 (visually lossless), at the source resolution
   and frame rate. A variable frame rate (phones, some webcams) is rounded to
   the nearest standard rate. Cuts land exactly on frame boundaries, so sound
@@ -216,5 +225,5 @@ words themselves. That is refused up front unless you pass `--force`.
 
 Code is in `podedit/`: `transcribe` (recognition + analysis), `analysis` (cut
 points, bleed filter), `doc` + `align` (markdown and edit alignment), `edl`
-(deleted words → keep ranges), `shots` (active-speaker camera switching),
+(deleted words → keep ranges), `loudness` (per-person speech levels), `shots` (active-speaker camera switching),
 `splice` (audio), `render` (ffmpeg graph), `cli`.

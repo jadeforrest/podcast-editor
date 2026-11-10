@@ -85,9 +85,9 @@ def offset_filter(offset: float) -> str:
     return ""
 
 
-def decode_audio(path: Path, rate: int = 16000, offset: float = 0.0) -> np.ndarray:
-    """Decode a file's audio to mono float32 at `rate`, aligned to its video if it has one."""
+def decode_audio(path: Path, rate: int = 16000, offset: float = 0.0, channels: int = 1) -> np.ndarray:
+    """Decode a file's audio to float32 at `rate` (interleaved if `channels` > 1), aligned to its video."""
     cmd = ["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-vn", "-af", f"{offset_filter(offset)}anull",
-           "-ac", "1", "-ar", str(rate), "-f", "f32le", "pipe:1"]
+           "-ac", str(channels), "-ar", str(rate), "-f", "f32le", "pipe:1"]
     raw = subprocess.run(cmd, check=True, capture_output=True).stdout
     return np.frombuffer(raw, dtype=np.float32).copy()

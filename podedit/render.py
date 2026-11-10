@@ -9,7 +9,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from . import doc, edl, shots
+from . import doc, edl, loudness, shots
 from .media import AUDIO_GRID, Probe, offset_filter, probe
 from .paths import Episode
 from .splice import splice_stream
@@ -22,6 +22,9 @@ BIG_CUT_SHARE = 0.5          # removing more than this share of the episode need
 TAIL_CUT_SHARE = 0.2         # ...as does deleting the last stretch when it is this long
 TAIL_CUT_SECONDS = 600
 DEFAULT_SIZE = (1920, 1080)
+# Lookahead limiter on the mix: peaks are held under -1 dBFS (room for AAC's inter-sample overs) without
+# clipping. level=0: no auto make-up gain; latency=1: its lookahead delay is removed, so A/V stays in sync.
+LIMITER = "alimiter=limit=0.891:attack=5:release=50:level=0:latency=1"
 AFORMAT = f"aformat=sample_fmts=fltp:sample_rates={AUDIO_RATE}:channel_layouts=stereo"
 
 
@@ -254,22 +257,31 @@ def encoder_args(fast: bool) -> list[str]:
 
 # --- running ----------------------------------------------------------------------------------
 
-def mix_command(ep_root: Path, tracks: list[dict]) -> list[str]:
+def gain_filter(db: float) -> str:
+    return f"volume={db:.2f}dB," if abs(db) >= 0.005 else ""
+
+
+def mix_command(ep_root: Path, tracks: list[dict], gains: dict[str, float] | None = None) -> list[str]:
+    """Decode, level (per-person `gains`, dB), mix and limit every sound source to 48 kHz stereo float."""
     audio = [t for t in tracks if t.get("audio_source", t.get("has_audio"))]
+    gains = gains or {}
     cmd = ["ffmpeg", "-nostdin", "-v", "error"]
     for t in audio:
         cmd += ["-i", str(ep_root / t["file"])]
-    chains = "".join(f"[{i}:a:0]{offset_filter(t.get('audio_offset', 0.0))}anull[s{i}];" for i, t in enumerate(audio))
+    chains = "".join(f"[{i}:a:0]{offset_filter(t.get('audio_offset', 0.0))}{gain_filter(gains.get(t['name'], 0.0))}"
+                     f"anull[s{i}];" for i, t in enumerate(audio))
     ins = "".join(f"[s{i}]" for i in range(len(audio)))
     mixer = f"amix=inputs={len(audio)}:normalize=0:duration=longest," if len(audio) > 1 else "anull,"
-    graph = f"{chains}{ins}{mixer}aresample={AUDIO_RATE},aformat=sample_fmts=flt:channel_layouts=stereo[a]"
+    graph = (f"{chains}{ins}{mixer}aresample={AUDIO_RATE},aformat=sample_fmts=dbl:channel_layouts=stereo,"
+             f"{LIMITER},aformat=sample_fmts=flt[a]")
     return cmd + ["-filter_complex", graph, "-map", "[a]", "-f", "f32le", "pipe:1"]
 
 
-def cut_audio(ep: Episode, transcript: dict, plan: EditPlan, dest: Path) -> None:
+def cut_audio(ep: Episode, transcript: dict, plan: EditPlan, dest: Path, normalize: bool = True) -> None:
     ranges = sample_ranges(plan.frames, plan.fps)
     total = int(round(transcript["duration"] * AUDIO_RATE))
-    proc = subprocess.Popen(mix_command(ep.root, transcript["tracks"]), stdout=subprocess.PIPE)
+    gains = loudness.track_gains(ep.root, transcript) if normalize else None
+    proc = subprocess.Popen(mix_command(ep.root, transcript["tracks"], gains), stdout=subprocess.PIPE)
     with tqdm(total=total, desc="Cutting audio  ", bar_format="{l_bar}{bar}| [{elapsed}<{remaining}]") as bar, \
             open(dest, "wb") as out:
         splice_stream(proc.stdout, out, ranges, total, CHANNELS, FADE,
@@ -299,10 +311,11 @@ def load_segment(path: Path | None) -> Segment | None:
 
 
 def render(ep: Episode, transcript: dict, plan: EditPlan, *, layout: str, camera: str | None, intro: Path | None,
-           outro: Path | None, cover: Path | None, fast: bool, min_shot: float = shots.MIN_SHOT) -> Path:
+           outro: Path | None, cover: Path | None, fast: bool, min_shot: float = shots.MIN_SHOT,
+           normalize: bool = True) -> Path:
     ep.output_dir.mkdir(exist_ok=True)
     audio_file = ep.work_dir / "edited-audio.f32"
-    cut_audio(ep, transcript, plan, audio_file)
+    cut_audio(ep, transcript, plan, audio_file, normalize)
     segs = load_segment(intro), load_segment(outro)
     g = build_graph(ep.root, transcript, plan, audio_file, layout, camera, segs[0], segs[1], cover, min_shot)
     if plan.shots:
