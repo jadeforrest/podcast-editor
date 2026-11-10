@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Entry point: ./pod <command> ...   (see README.md)
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -x "$here/.venv/bin/python" ]]; then
+  echo "Setting up .venv (first run)..." >&2
+  python3.12 -m venv "$here/.venv"
+  "$here/.venv/bin/pip" install -q -r "$here/requirements.txt"
+fi
+exec "$here/.venv/bin/python" -m podedit.cli "$@"

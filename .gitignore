@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.hypothesis/
+.coverage
+coverage.json
+
+# Media and per-episode data are never committed
+episodes/*
+!episodes/README.md
+templates/*
+!templates/README.md
