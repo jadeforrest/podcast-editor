@@ -286,6 +286,8 @@ def cut_audio(ep: Episode, transcript: dict, plan: EditPlan, dest: Path, normali
             open(dest, "wb") as out:
         splice_stream(proc.stdout, out, ranges, total, CHANNELS, FADE,
                       on_progress=lambda frames: bar.update(min(frames, bar.total - bar.n)))
+        while proc.stdout.read(1 << 20):  # drain a cut-off ending: closing early breaks ffmpeg's pipe
+            pass
         proc.stdout.close()
     if proc.wait() != 0:
         raise SystemExit("ffmpeg failed while decoding the source audio")

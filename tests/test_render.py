@@ -257,3 +257,14 @@ def test_cut_audio_fades_at_every_splice(tmp_path, media_dir):
     k = rnd.sample_ranges(plan.frames, plan.fps)[0][1] - rnd.sample_ranges(plan.frames, plan.fps)[0][0]
     assert len(plan.frames) == 2 and len(a) == sum(b - a_ for a_, b in rnd.sample_ranges(plan.frames, plan.fps))
     assert np.abs(a[k - 2:k + 2]).max() < 0.01 < np.abs(a[k - 2000:k - 1000]).max()
+
+
+def test_cut_audio_survives_cutting_the_ending(tmp_path, media_dir):
+    """Regression: once the last kept sample is read the pipe is closed; ffmpeg's broken pipe isn't a failure."""
+    import numpy as np
+    ep, t = setup_episode(tmp_path, media_dir, AUDIO_ONLY, ["c.wav"])
+    plan = rnd.plan_edit(t, md_without(t, "\n**b** [00:00:02]\nyes\n"))  # keeps 0-2.1 s of 4 s
+    dest = ep.work_dir / "a.f32"
+    rnd.cut_audio(ep, t, plan, dest, normalize=False)
+    assert len(np.fromfile(dest, np.float32)) // 2 == sum(b - a for a, b in rnd.sample_ranges(plan.frames, plan.fps))
+    assert plan.kept_seconds < 2.5
