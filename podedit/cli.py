@@ -76,7 +76,7 @@ def cmd_render(args) -> int:
     for label, path in (("intro", intro), ("outro", outro)):
         print(f"{label}: {path or 'none'}")
     out = rnd.render(ep, transcript, plan, layout=args.layout, camera=args.camera, intro=intro, outro=outro,
-                     cover=cover, fast=args.fast)
+                     cover=cover, fast=args.fast, min_shot=args.min_shot)
     print(f"Done: {out}")
     return 0
 
@@ -125,8 +125,12 @@ def parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("render", help="render the edited episode to output/<episode>.mp4")
     edit_options(p)
-    p.add_argument("--layout", choices=["side-by-side", "single"], default="side-by-side")
+    p.add_argument("--layout", choices=["speaker", "side-by-side", "single"], default="speaker",
+                   help="speaker: show whoever is talking (default); side-by-side: all cameras at once; "
+                        "single: one camera throughout")
     p.add_argument("--camera", help="with --layout single: which track's video to use")
+    p.add_argument("--min-shot", type=float, default=2.0, metavar="SECONDS",
+                   help="with --layout speaker: shortest time on one camera before switching (default 2)")
     p.add_argument("--no-intro", action="store_true")
     p.add_argument("--no-outro", action="store_true")
     p.add_argument("--fast", action="store_true", help="hardware encoder: much faster, somewhat larger/lower quality")

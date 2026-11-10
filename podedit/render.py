@@ -9,7 +9,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from . import doc, edl
+from . import doc, edl, shots
 from .media import Probe, probe
 from .paths import Episode
 from .splice import splice_stream
@@ -29,6 +29,7 @@ class EditPlan:
     deleted: int
     problems: list[edl.Problem] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    shots: list[tuple[int, int]] = field(default_factory=list)  # (output frame, camera index), speaker layout
 
     @property
     def kept_frames(self) -> int:
@@ -77,7 +78,7 @@ class Segment:
 
 def choose_cameras(tracks: list[dict], layout: str, camera: str | None) -> list[dict]:
     videos = [t for t in tracks if t.get("has_video")]
-    if not videos or layout == "side-by-side":
+    if not videos or layout in ("speaker", "side-by-side"):
         return videos
     if camera:
         match = [t for t in videos if t["name"] == camera]
@@ -123,28 +124,64 @@ class Graph:
         return [a for inp in self.inputs for a in inp]
 
 
-def main_video(g: Graph, ep_root: Path, cameras: list[dict], plan: EditPlan, size: tuple[int, int],
-               cover: Path | None) -> None:
+def still_video(g: Graph, plan: EditPlan, size: tuple[int, int], cover: Path | None) -> None:
+    """Audio-only episode: the cover picture, or black."""
     w, h = size
-    fps, total = plan.fps, plan.kept_frames
-    if not cameras:
-        seconds = f"{plan.kept_seconds + 1:.3f}"
-        if cover:
-            k = g.add_input("-loop", "1", "-framerate", str(fps), "-t", seconds, "-i", str(cover))
-        else:
-            k = g.add_input("-f", "lavfi", "-i", f"color=c=black:s={w}x{h}:r={fps}:d={seconds}")
-        g.filters.append(f"[{k}:v:0]{fit_chain(w, h, fps)},trim=end_frame={total}[mv]")
-        return
-    cell = even(w // len(cameras))
+    fps, seconds = plan.fps, f"{plan.kept_seconds + 1:.3f}"
+    if cover:
+        k = g.add_input("-loop", "1", "-framerate", str(fps), "-t", seconds, "-i", str(cover))
+    else:
+        k = g.add_input("-f", "lavfi", "-i", f"color=c=black:s={w}x{h}:r={fps}:d={seconds}")
+    g.filters.append(f"[{k}:v:0]{fit_chain(w, h, fps)},trim=end_frame={plan.kept_frames}[mv]")
+
+
+def camera_inputs(g: Graph, ep_root: Path, cameras: list[dict], chain) -> str:
+    """Add each camera with its filter chain; returns their joined output labels."""
     labels = []
     for n, cam in enumerate(cameras):
         k = g.add_input("-i", str(ep_root / cam["file"]))
-        g.filters.append(f"{camera_chain(k, cell, h, fps)}[c{n}]")
+        g.filters.append(f"{chain(k)}[c{n}]")
         labels.append(f"[c{n}]")
-    stack = f"hstack=inputs={len(labels)}," if len(labels) > 1 else ""
+    return "".join(labels)
+
+
+def cut_and_finish(plan: EditPlan) -> str:
+    return f"select='{select_expr(plan.frames)}',setpts=N/FRAME_RATE/TB"
+
+
+def tiled_video(g: Graph, ep_root: Path, cameras: list[dict], plan: EditPlan, size: tuple[int, int]) -> None:
+    """One camera full-frame, or several side by side, each centre-cropped to its slice."""
+    w, h = size
+    cell = even(w // len(cameras))
+    labels = camera_inputs(g, ep_root, cameras, lambda k: camera_chain(k, cell, h, plan.fps))
+    stack = f"hstack=inputs={len(cameras)}," if len(cameras) > 1 else ""
     pad = f"pad={w}:{h}:(ow-iw)/2:0," if cell * len(cameras) != w else ""
-    g.filters.append(f"{''.join(labels)}{stack}{pad}select='{select_expr(plan.frames)}',"
-                     f"setpts=N/FRAME_RATE/TB,format=yuv420p,trim=end_frame={total}[mv]")
+    g.filters.append(f"{labels}{stack}{pad}{cut_and_finish(plan)},format=yuv420p,"
+                     f"trim=end_frame={plan.kept_frames}[mv]")
+
+
+def speaker_video(g: Graph, ep_root: Path, cameras: list[dict], plan: EditPlan, size: tuple[int, int],
+                  words: list[dict], min_shot: float) -> None:
+    """Show whoever is talking: the cameras sit in a strip, and a moving crop picks one per shot."""
+    w, h = size
+    chain = lambda k: (f"[{k}:v:0]setpts=PTS-STARTPTS,{fit_chain(w, h, plan.fps)},"  # noqa: E731
+                       "tpad=stop_mode=clone:stop_duration=5")
+    labels = camera_inputs(g, ep_root, cameras, chain)
+    plan.shots = shots.plan_shots(words, [c["name"] for c in cameras], plan.frames, plan.fps, min_shot)
+    x = shots.crop_x_expr(plan.shots, w, plan.kept_frames)
+    g.filters.append(f"{labels}hstack=inputs={len(cameras)},{cut_and_finish(plan)},crop={w}:{h}:x='{x}':y=0,"
+                     f"format=yuv420p,trim=end_frame={plan.kept_frames}[mv]")
+
+
+def main_video(g: Graph, ep_root: Path, cameras: list[dict], plan: EditPlan, size: tuple[int, int],
+               cover: Path | None, layout: str = "speaker", words: list[dict] | None = None,
+               min_shot: float = shots.MIN_SHOT) -> None:
+    if not cameras:
+        still_video(g, plan, size, cover)
+    elif layout == "speaker" and len(cameras) > 1:
+        speaker_video(g, ep_root, cameras, plan, size, words or [], min_shot)
+    else:
+        tiled_video(g, ep_root, cameras, plan, size)
 
 
 def segment_chains(g: Graph, seg: Segment, label: str, size: tuple[int, int], fps: Fraction) -> None:
@@ -161,13 +198,13 @@ def segment_chains(g: Graph, seg: Segment, label: str, size: tuple[int, int], fp
         g.filters.append(f"anullsrc=r={AUDIO_RATE}:cl=stereo,atrim=duration={d},{AFORMAT}[{label}a]")
 
 
-def build_graph(ep_root: Path, transcript: dict, plan: EditPlan, audio_file: Path, layout: str = "side-by-side",
+def build_graph(ep_root: Path, transcript: dict, plan: EditPlan, audio_file: Path, layout: str = "speaker",
                 camera: str | None = None, intro: Segment | None = None, outro: Segment | None = None,
-                cover: Path | None = None) -> Graph:
+                cover: Path | None = None, min_shot: float = shots.MIN_SHOT) -> Graph:
     g = Graph()
     cameras = choose_cameras(transcript["tracks"], layout, camera)
     size = canvas_size(cameras, intro)
-    main_video(g, ep_root, cameras, plan, size, cover)
+    main_video(g, ep_root, cameras, plan, size, cover, layout, transcript["words"], min_shot)
     k = g.add_input("-f", "f32le", "-ar", str(AUDIO_RATE), "-ac", str(CHANNELS), "-i", str(audio_file))
     g.filters.append(f"[{k}:a:0]{AFORMAT}[ma]")
     parts = []
@@ -233,12 +270,14 @@ def load_segment(path: Path | None) -> Segment | None:
 
 
 def render(ep: Episode, transcript: dict, plan: EditPlan, *, layout: str, camera: str | None, intro: Path | None,
-           outro: Path | None, cover: Path | None, fast: bool) -> Path:
+           outro: Path | None, cover: Path | None, fast: bool, min_shot: float = shots.MIN_SHOT) -> Path:
     ep.output_dir.mkdir(exist_ok=True)
     audio_file = ep.work_dir / "edited-audio.f32"
     cut_audio(ep, transcript, plan, audio_file)
     segs = load_segment(intro), load_segment(outro)
-    g = build_graph(ep.root, transcript, plan, audio_file, layout, camera, segs[0], segs[1], cover)
+    g = build_graph(ep.root, transcript, plan, audio_file, layout, camera, segs[0], segs[1], cover, min_shot)
+    if plan.shots:
+        print(f"Camera: {len(plan.shots)} shot(s), switching to whoever is talking")
     script = ep.work_dir / "render-filter.txt"
     script.write_text(";\n".join(g.filters))
     partial = ep.output_dir / f".{ep.name}.partial.mp4"

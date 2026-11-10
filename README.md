@@ -104,7 +104,9 @@ list that.
 | Option | What it does |
 |---|---|
 | `render --max-gap 1.0` | Also shortens every pause longer than 1 s to 1 s |
-| `render --layout single --camera alice` | Show one camera instead of side-by-side |
+| `render --min-shot 3` | With the default speaker layout: stay at least 3 s on a camera before switching (default 2) |
+| `render --layout side-by-side` | Show all cameras at once instead of switching to whoever is talking |
+| `render --layout single --camera alice` | Show one camera throughout |
 | `render --fast` | Hardware H.264 encoder: several times faster, larger file, a little lower quality |
 | `transcribe --model mlx-community/whisper-large-v3-mlx` | Slower, sometimes more accurate model |
 | `transcribe --language ''` | Auto-detect the language (default `en`) |
@@ -114,11 +116,18 @@ list that.
 
 ## Output
 
-- **Video layout.** One camera: its full frame. Several cameras: side-by-side,
-  each centre-cropped to an equal slice of a frame as large as the biggest
-  camera. Cameras are ordered by file name, so prefix `1-`/`2-` to control the
-  order (that also changes the speaker names). Audio-only: `cover.*` if present,
-  otherwise black, at the intro's size or 1920×1080.
+- **Video layout.** By default the picture **switches to whoever is talking**.
+  A speaker's camera is the video file with the same name, so `alice` talking
+  shows `alice.mp4`. The switch happens when someone starts a turn of at least
+  1 s, so a quick "yeah" doesn't move the camera. Every shot also lasts at least
+  `--min-shot` seconds (default 2). In silence, or while someone without a
+  camera talks, the shot stays where it is. Shots are planned on the edited
+  timeline, so cuts never leave a flash of the wrong camera. The frame is the
+  size of the biggest camera, and the other cameras are letterboxed to fit.
+  `--layout side-by-side` shows all cameras at once instead, each centre-cropped
+  to an equal slice, ordered by file name. With one camera, or `--layout
+  single`, that camera fills the frame throughout. Audio-only episodes show
+  `cover.*` if present, otherwise black, at the intro's size or 1920×1080.
 - **Audio.** All tracks mixed at their recorded levels, 48 kHz stereo, AAC 256k.
   Each cut has a 5 ms fade so it doesn't click.
 - **Quality.** H.264 at CRF 18 (visually lossless), at the source resolution
@@ -170,5 +179,5 @@ so trying new `--min-quiet`/`--quiet-db` values is quick.
 
 Code is in `podedit/`: `transcribe` (recognition + analysis), `analysis` (cut
 points, bleed filter), `doc` + `align` (markdown and edit alignment), `edl`
-(deleted words → keep ranges), `splice` (audio), `render` (ffmpeg graph),
-`cli`.
+(deleted words → keep ranges), `shots` (active-speaker camera switching),
+`splice` (audio), `render` (ffmpeg graph), `cli`.
