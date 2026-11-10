@@ -5,7 +5,9 @@ import numpy as np
 import pytest
 
 from podedit import cli, paths, transcribe
-from podedit.media import parse_probe, parse_rate, probe
+from fractions import Fraction
+
+from podedit.media import offset_filter, parse_probe, parse_rate, probe, start_time
 from podedit.paths import Episode, find_template, find_tracks, resolve_episode
 from tests.test_render import CAMS, md_without, transcript
 
@@ -87,6 +89,15 @@ def test_probe_parsing(media_dir):
     assert not p.has_video and p.has_audio and p.duration == 3.5
     real = probe(media_dir / "a.mp4")
     assert real.has_video and real.width == 320 and real.fps == 25
+    assert parse_rate("1567/52") == 30 and parse_rate("12/1") == 12 and parse_rate("24000/1001") == Fraction(24000, 1001)
+    late = parse_probe(media_dir / "x", {"streams": [
+        {"codec_type": "video", "start_time": "0.000"}, {"codec_type": "audio", "start_time": "0.050"}],
+        "format": {}})
+    assert late.audio_offset == 0.05
+    assert offset_filter(0.05) == "adelay=50.0:all=1," and offset_filter(-0.02).startswith("atrim=start=0.0200")
+    assert offset_filter(0) == ""
+    assert "audio starts +50 ms" in transcribe.offset_warnings([late])[0]
+    assert start_time({"start_time": "N/A"}) == 0.0
 
 
 # --- transcribe, with Whisper replaced by a fake ------------------------------------------------
@@ -107,13 +118,65 @@ def test_transcribe_pipeline(tmp_path, media_dir, monkeypatch, capsys):
     assert [w["text"] for w in t["words"]] == ["Hello,", "world."]
     assert len(t["cuts"]) == 3 and t["settings"]["language"] is None
     assert "Hello," in ep.transcript_md.read_text()
-    # second run uses the cache and refuses to clobber edits
-    ep.transcript_md.write_text("edited")
+    # editing, then re-running with new analysis settings keeps the edits (words come from the cache)
+    md = ep.transcript_md.read_text()
+    ep.transcript_md.write_text(md.replace("Hello,", ""))
     monkeypatch.setattr(transcribe, "run_whisper", lambda *a: pytest.fail("cache not used"))
-    with pytest.raises(SystemExit, match="has edits"):
-        cli.main(["transcribe", str(ep.root), "--language", ""])
-    assert "cached" in capsys.readouterr().out
-    assert cli.main(["transcribe", str(ep.root), "--language", "", "--force", "--quiet-db", "-30"]) == 0
+    assert cli.main(["transcribe", str(ep.root), "--language", "", "--quiet-db", "-30"]) == 0
+    out = capsys.readouterr().out
+    assert "cached" in out and "Kept your edits (1 words deleted)" in out
+    assert "Hello," not in ep.transcript_md.read_text() and "world." in ep.transcript_md.read_text()
+    assert (ep.work_dir / "transcript.before-retranscribe.md").is_file()
+    # a different model would change the words: refused before any slow work
+    with pytest.raises(SystemExit, match="different model"):
+        cli.main(["transcribe", str(ep.root), "--language", "", "--model", "other"])
+    assert cli.main(["transcribe", str(ep.root), "--language", "", "--force"]) == 0
+    assert "Hello," in ep.transcript_md.read_text()
+
+
+def test_carry_over_refuses_if_words_changed(tmp_path, media_dir, monkeypatch):
+    monkeypatch.setattr(transcribe, "run_whisper", fake_whisper)
+    ep = Episode(tmp_path / "ep")
+    ep.create()
+    shutil.copy(media_dir / "a.mp4", ep.input_dir / "a.mp4")
+    cli.main(["transcribe", str(ep.root)])
+    ep.transcript_md.write_text("edited")
+    t = json.loads(ep.transcript_json.read_text())
+    t["words"][0]["text"] = "Goodbye"
+    with pytest.raises(SystemExit, match="words changed"):
+        transcribe.write_outputs(ep, t, force=False)
+
+
+def test_camera_paired_with_mic_and_silent_camera(tmp_path, media_dir, monkeypatch):
+    seen = []
+    monkeypatch.setattr(transcribe, "run_whisper", lambda audio, m, l: seen.append(len(audio)) or fake_whisper(0, 0, 0))
+    ep = Episode(tmp_path / "ep")
+    ep.create()
+    shutil.copy(media_dir / "a.mp4", ep.input_dir / "jade.mp4")     # camera with its own (scratch) sound
+    shutil.copy(media_dir / "c.wav", ep.input_dir / "jade.wav")     # jade's real mic
+    shutil.copy(media_dir / "silent.mp4", ep.input_dir / "wide.mp4")  # a camera with no sound at all
+    t = transcribe.build(ep)
+    roles = {tr["file"]: tr["audio_source"] for tr in t["tracks"]}
+    assert roles == {"input/jade.mp4": False, "input/jade.wav": True, "input/wide.mp4": False}
+    assert len(seen) == 1  # only the mic is transcribed
+    assert {w["speaker"] for w in t["words"]} == {"jade"}
+    from podedit import render as rnd
+    cmd = rnd.mix_command(ep.root, t["tracks"])
+    assert cmd.count("-i") == 1 and str(ep.root / "input/jade.wav") in cmd
+
+
+def test_only_silent_files(tmp_path, media_dir):
+    ep = Episode(tmp_path / "ep")
+    ep.create()
+    shutil.copy(media_dir / "silent.mp4", ep.input_dir / "cam.mp4")
+    with pytest.raises(SystemExit, match="has any sound"):
+        transcribe.build(ep)
+
+
+def test_new_rejects_bad_names(episodes):
+    for bad in ("../x", "a/b", ".hidden", ""):
+        with pytest.raises(SystemExit, match="Episode names"):
+            cli.main(["new", bad])
 
 
 def test_transcribe_errors(tmp_path, media_dir, monkeypatch):
@@ -121,9 +184,9 @@ def test_transcribe_errors(tmp_path, media_dir, monkeypatch):
     ep.create()
     with pytest.raises(SystemExit, match="No media files"):
         transcribe.build(ep)
-    shutil.copy(media_dir / "a.mp4", ep.input_dir / "x.mp4")
     shutil.copy(media_dir / "c.wav", ep.input_dir / "x.wav")
-    with pytest.raises(SystemExit, match="same name"):
+    shutil.copy(media_dir / "c.wav", ep.input_dir / "x.flac")
+    with pytest.raises(SystemExit, match="same kind"):
         transcribe.build(ep)
 
 

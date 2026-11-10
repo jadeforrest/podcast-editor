@@ -50,4 +50,11 @@ def media_dir(tmp_path_factory) -> Path:
     ffmpeg("-f", "lavfi", "-i", "color=c=green:s=640x360:r=30:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p",
            str(d / "outro.mp4"))
     ffmpeg("-f", "lavfi", "-i", "color=c=white:s=200x200", "-frames:v", "1", str(d / "cover.png"))
+    ffmpeg("-f", "lavfi", "-i", "testsrc=s=320x240:r=25:d=4", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+           str(d / "silent.mp4"))
+    # A/V sync source: every second, a white frame and a 1 kHz beep start together
+    flash = "color=c=black:s=160x120:r=25:d=6,geq=lum='if(lt(mod(N,25),1),255,16)':cb=128:cr=128"
+    beep = "aevalsrc='if(lt(mod(t,1),0.04),0.8*sin(2*PI*1000*t),0)':s=48000:d=6"
+    ffmpeg("-f", "lavfi", "-i", flash, "-f", "lavfi", "-i", beep, "-c:v", "libx264", "-pix_fmt", "yuv420p",
+           "-c:a", "aac", "-shortest", str(d / "sync.mp4"))
     return d

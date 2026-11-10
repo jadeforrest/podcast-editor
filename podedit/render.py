@@ -10,7 +10,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from . import doc, edl, shots
-from .media import Probe, probe
+from .media import AUDIO_GRID, Probe, offset_filter, probe
 from .paths import Episode
 from .splice import splice_stream
 
@@ -18,6 +18,9 @@ AUDIO_RATE = 48000
 CHANNELS = 2
 FADE = int(AUDIO_RATE * 0.005)  # 5 ms fade at each splice
 DEFAULT_FPS = Fraction(30)
+BIG_CUT_SHARE = 0.5          # removing more than this share of the episode needs --allow-big-cut
+TAIL_CUT_SHARE = 0.2         # ...as does deleting the last stretch when it is this long
+TAIL_CUT_SECONDS = 600
 DEFAULT_SIZE = (1920, 1080)
 AFORMAT = f"aformat=sample_fmts=fltp:sample_rates={AUDIO_RATE}:channel_layouts=stereo"
 
@@ -25,7 +28,7 @@ AFORMAT = f"aformat=sample_fmts=fltp:sample_rates={AUDIO_RATE}:channel_layouts=s
 @dataclass
 class EditPlan:
     frames: list[tuple[int, int]]
-    fps: Fraction
+    fps: Fraction  # the cut grid: the video frame rate, or AUDIO_GRID for audio-only
     deleted: int
     problems: list[edl.Problem] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -39,23 +42,46 @@ class EditPlan:
     def kept_seconds(self) -> float:
         return float(self.kept_frames / self.fps)
 
+    @property
+    def video_fps(self) -> Fraction:
+        return DEFAULT_FPS if self.fps == AUDIO_GRID else self.fps
 
-def video_fps(transcript: dict) -> Fraction:
+
+def video_fps(transcript: dict) -> Fraction | None:
     rates = [Fraction(t["fps"]) for t in transcript["tracks"] if t.get("has_video") and t.get("fps")]
-    return max(rates) if rates else DEFAULT_FPS
+    return max(rates) if rates else None
 
 
-def plan_edit(transcript: dict, md: str, keep_unclean: bool = False, max_gap: float | None = None) -> EditPlan:
+def big_cut_problems(words: list[dict], runs: list[tuple[int, int]], duration: float, kept: float) -> list[edl.Problem]:
+    """Catch the classic LLM failure: a transcript that stops early reads as 'delete the rest'."""
+    out = []
+    if duration and (duration - kept) / duration > BIG_CUT_SHARE:
+        out.append(edl.Problem((0, 0), f"this removes {100 * (duration - kept) / duration:.0f}% of the episode"))
+    if runs and words and runs[-1][1] == len(words) - 1:
+        tail = duration - words[runs[-1][0]]["start"]
+        if tail > TAIL_CUT_SECONDS or tail > TAIL_CUT_SHARE * duration:
+            out.append(edl.Problem(runs[-1], f"everything from [{doc.timestamp(words[runs[-1][0]]['start'])}] to "
+                                             f"the end ({tail / 60:.0f} min) is deleted"))
+    for p in out:
+        p.message += (" - if transcript.md was edited by an LLM, its reply may have been cut off. "
+                      "Re-run with --allow-big-cut if this is intended.")
+    return out
+
+
+def plan_edit(transcript: dict, md: str, keep_unclean: bool = False, max_gap: float | None = None,
+              allow_big_cut: bool = False) -> EditPlan:
     words, cuts, duration = transcript["words"], transcript["cuts"], transcript["duration"]
     result = doc.diff_edit(words, md)
     plan = edl.plan_deletions(words, cuts, result.deleted)
-    fps = video_fps(transcript)
+    fps = video_fps(transcript) or AUDIO_GRID
     keeps = edl.keep_intervals(duration, edl.removals(plan.runs, cuts, duration, max_gap))
     deleted = sum(j - i + 1 for i, j in plan.runs)
     out = EditPlan(edl.snap_to_frames(keeps, fps), fps, deleted, plan.problems, result.warnings)
     if keep_unclean:
         out.warnings += [f"kept (not cut cleanly): {p.message.splitlines()[0]}" for p in plan.problems]
         out.problems = []
+    if not allow_big_cut:
+        out.problems += big_cut_problems(words, plan.runs, duration, out.kept_seconds)
     return out
 
 
@@ -77,8 +103,9 @@ class Segment:
 
 
 def choose_cameras(tracks: list[dict], layout: str, camera: str | None) -> list[dict]:
+    """Cameras to show. Naming a camera means showing only it, whatever the layout."""
     videos = [t for t in tracks if t.get("has_video")]
-    if not videos or layout in ("speaker", "side-by-side"):
+    if not videos or (layout != "single" and not camera):
         return videos
     if camera:
         match = [t for t in videos if t["name"] == camera]
@@ -90,7 +117,8 @@ def choose_cameras(tracks: list[dict], layout: str, camera: str | None) -> list[
 
 def canvas_size(cameras: list[dict], intro: Segment | None) -> tuple[int, int]:
     if cameras:
-        return even(max(t["width"] for t in cameras)), even(max(t["height"] for t in cameras))
+        biggest = max(cameras, key=lambda t: t["width"] * t["height"])
+        return even(biggest["width"]), even(biggest["height"])
     if intro and intro.probe.has_video:
         return even(intro.probe.width), even(intro.probe.height)
     return DEFAULT_SIZE
@@ -127,12 +155,12 @@ class Graph:
 def still_video(g: Graph, plan: EditPlan, size: tuple[int, int], cover: Path | None) -> None:
     """Audio-only episode: the cover picture, or black."""
     w, h = size
-    fps, seconds = plan.fps, f"{plan.kept_seconds + 1:.3f}"
+    fps, seconds = plan.video_fps, f"{plan.kept_seconds + 1:.3f}"
     if cover:
         k = g.add_input("-loop", "1", "-framerate", str(fps), "-t", seconds, "-i", str(cover))
     else:
         k = g.add_input("-f", "lavfi", "-i", f"color=c=black:s={w}x{h}:r={fps}:d={seconds}")
-    g.filters.append(f"[{k}:v:0]{fit_chain(w, h, fps)},trim=end_frame={plan.kept_frames}[mv]")
+    g.filters.append(f"[{k}:v:0]{fit_chain(w, h, fps)},trim=end_frame={round(plan.kept_seconds * fps)}[mv]")
 
 
 def camera_inputs(g: Graph, ep_root: Path, cameras: list[dict], chain) -> str:
@@ -212,7 +240,7 @@ def build_graph(ep_root: Path, transcript: dict, plan: EditPlan, audio_file: Pat
         if label == "m":
             parts.append("[mv][ma]")
         elif seg is not None:
-            segment_chains(g, seg, label, size, plan.fps)
+            segment_chains(g, seg, label, size, plan.video_fps)
             parts.append(f"[{label}v][{label}a]")
     g.filters.append(f"{''.join(parts)}concat=n={len(parts)}:v=1:a=1[outv][outa]")
     return g
@@ -227,13 +255,14 @@ def encoder_args(fast: bool) -> list[str]:
 # --- running ----------------------------------------------------------------------------------
 
 def mix_command(ep_root: Path, tracks: list[dict]) -> list[str]:
-    audio = [t for t in tracks if t.get("has_audio")]
+    audio = [t for t in tracks if t.get("audio_source", t.get("has_audio"))]
     cmd = ["ffmpeg", "-nostdin", "-v", "error"]
     for t in audio:
         cmd += ["-i", str(ep_root / t["file"])]
-    ins = "".join(f"[{i}:a:0]" for i in range(len(audio)))
-    mixer = f"amix=inputs={len(audio)}:normalize=0:duration=longest," if len(audio) > 1 else ""
-    graph = f"{ins}{mixer}aresample={AUDIO_RATE},aformat=sample_fmts=flt:channel_layouts=stereo[a]"
+    chains = "".join(f"[{i}:a:0]{offset_filter(t.get('audio_offset', 0.0))}anull[s{i}];" for i, t in enumerate(audio))
+    ins = "".join(f"[s{i}]" for i in range(len(audio)))
+    mixer = f"amix=inputs={len(audio)}:normalize=0:duration=longest," if len(audio) > 1 else "anull,"
+    graph = f"{chains}{ins}{mixer}aresample={AUDIO_RATE},aformat=sample_fmts=flt:channel_layouts=stereo[a]"
     return cmd + ["-filter_complex", graph, "-map", "[a]", "-f", "f32le", "pipe:1"]
 
 

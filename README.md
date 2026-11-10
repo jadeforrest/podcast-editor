@@ -39,11 +39,21 @@ templates/
 Everything under `episodes/` and `templates/` is ignored by git (except the READMEs).
 
 **Input files.** Name each one after the person (`jade.mp4`, `alice.mp4`): the
-file name becomes the speaker name in the transcript. Video (`.mp4 .mov .mkv
-.webm …`) and audio (`.wav .m4a .mp3 .flac …`) both work, and they can be mixed,
-e.g. two camera files, or one video plus a separate good-mic `.wav`. All files
-must start at the same moment (as separate-track exports from Riverside, Zoom,
-SquadCast, etc. do). They are cut identically.
+file name, without its extension, becomes the speaker name in the transcript.
+Video (`.mp4 .mov .mkv .webm …`) and audio (`.wav .m4a .mp3 .flac …`) both work.
+All files must start at the same moment (as separate-track exports from
+Riverside, Zoom, SquadCast, etc. do). They are cut identically.
+
+| A person has | Used for sound | Used for picture |
+|---|---|---|
+| `jade.mp4` | its own sound | it |
+| `jade.mp4` + `jade.wav` (camera plus their own mic) | the `.wav` only. The camera's sound is ignored, so there's no echo | the `.mp4` |
+| `jade.wav` | it | none (the camera holds on whoever was last on screen) |
+| `wide.mp4` with no sound | none | it, but only with `--layout side-by-side` or `--camera wide` |
+
+A person can have at most one video file and one audio file. If a file's audio
+starts slightly before or after its video (some recorders do this), the
+difference is read from the file and corrected.
 
 **Intro/outro.** If `intro.*`/`outro.*` exists in the episode folder it's used;
 otherwise the one in `templates/`; otherwise none. `--no-intro`/`--no-outro`
@@ -68,7 +78,11 @@ Yes. It's very red.
 - **Keep the speaker lines** (`**jade** [00:01:12]`). They hold your edits in
   place. To cut a whole paragraph, delete it along with its speaker line. The
   times are where the paragraph starts in the *original* recording. They're
-  there to help you find it, and they don't change as you edit.
+  there to help you find it, and they don't change as you edit. During
+  crosstalk a speaker line may show tenths (`[00:01:12.4]`), which keeps every
+  line unique.
+- A line starting with `#` is ordinary speech (Whisper writes things like `#1`).
+  Only the title line at the top counts as a heading.
 - **Don't add, reword or reorder** words. New words can't be recorded after the
   fact, so the original audio is kept and `check` lists what was ignored.
   Spelling and punctuation fixes are fine and stay quiet.
@@ -82,9 +96,15 @@ CAN'T CUT: [00:00:02] jade: can't cut 'talk about' cleanly (before it runs into 
     smallest clean cut containing it: 'I think we should talk about'
 ```
 
-Fix it by putting the words back, or deleting the suggested larger phrase.
+Fix it by putting the words back, or deleting the suggested larger phrase. You
+can also re-run `transcribe` with a lower `--min-quiet`, which keeps your edits.
 `render` refuses to run while problems remain. `render --keep-unclean` renders
 anyway and leaves those words in.
+
+`check` and `render` also stop when an edit would remove more than half the
+episode, or delete a long stretch at the end (over 10 min, or 20% of the
+episode). That is usually an LLM whose reply was cut off partway through the
+file. Pass `--allow-big-cut` if you meant it.
 
 ### Editing with an LLM
 
@@ -106,13 +126,14 @@ list that.
 | `render --max-gap 1.0` | Also shortens every pause longer than 1 s to 1 s |
 | `render --min-shot 3` | With the default speaker layout: stay at least 3 s on a camera before switching (default 2) |
 | `render --layout side-by-side` | Show all cameras at once instead of switching to whoever is talking |
-| `render --layout single --camera alice` | Show one camera throughout |
+| `render --camera alice` | Show only Alice's camera throughout |
 | `render --fast` | Hardware H.264 encoder: several times faster, larger file, a little lower quality |
 | `transcribe --model mlx-community/whisper-large-v3-mlx` | Slower, sometimes more accurate model |
 | `transcribe --language ''` | Auto-detect the language (default `en`) |
 | `transcribe --min-quiet 0.03` | Shortest pause (s) that counts as a clean cut point. Lower means more cuttable, with more risk of a clipped word |
 | `transcribe --quiet-db -45` | Override the auto-detected "quiet" level |
-| `transcribe --force` | Re-transcribe even though `transcript.md` has edits (they're lost) |
+| `render --allow-big-cut` | Allow removing over half the episode, or a long stretch at the end |
+| `transcribe --force` | Start `transcript.md` afresh, discarding your edits. Not needed just to change `--min-quiet`/`--quiet-db` |
 
 ## Output
 
@@ -123,16 +144,19 @@ list that.
   `--min-shot` seconds (default 2). In silence, or while someone without a
   camera talks, the shot stays where it is. Shots are planned on the edited
   timeline, so cuts never leave a flash of the wrong camera. The frame is the
-  size of the biggest camera, and the other cameras are letterboxed to fit.
+  size of the biggest camera (by area), and the other cameras are letterboxed
+  to fit.
   `--layout side-by-side` shows all cameras at once instead, each centre-cropped
   to an equal slice, ordered by file name. With one camera, or `--layout
   single`, that camera fills the frame throughout. Audio-only episodes show
   `cover.*` if present, otherwise black, at the intro's size or 1920×1080.
-- **Audio.** All tracks mixed at their recorded levels, 48 kHz stereo, AAC 256k.
-  Each cut has a 5 ms fade so it doesn't click.
+- **Audio.** Every person's sound mixed at its recorded level, 48 kHz stereo,
+  AAC 256k. Each cut has a 5 ms fade so it doesn't click.
 - **Quality.** H.264 at CRF 18 (visually lossless), at the source resolution
-  and frame rate. Cuts land exactly on frame boundaries, so sound and picture
-  stay in sync however many cuts there are.
+  and frame rate. A variable frame rate (phones, some webcams) is rounded to
+  the nearest standard rate. Cuts land exactly on frame boundaries, so sound
+  and picture stay in sync however many cuts there are. A test checks this
+  with a flash and a beep.
 
 ## How it works
 
@@ -142,8 +166,10 @@ list that.
    (hallucinations), are dropped. The rest are merged in time order. The mixed
    audio is then measured in 10 ms frames. Between every pair of consecutive
    words, the tool looks for a stretch of at least `min-quiet` seconds that is
-   quiet relative to the speech level. If one exists, its middle is the cut
-   point for that boundary. If not, the boundary gets a `‿`. Everything is
+   quiet relative to the speech level and contains a video frame boundary. If
+   one exists, the frame boundary nearest its middle is the cut point for that
+   boundary. If not, the boundary gets a `‿`. (Audio-only episodes cut to the
+   millisecond.) Everything is
    saved in `work/transcript.json`. `transcript.md` is generated from it and
    holds no timings at all.
 2. **check / render.** The edited `transcript.md` is aligned back to the
@@ -152,19 +178,30 @@ list that.
    match were deleted. Because timings are looked up in the untouched JSON,
    deleting text never shifts any offsets. Each run of deleted words is removed
    from the cut point before it to the cut point after it, which leaves about
-   one natural pause. The kept ranges are snapped to video frames. The audio is
+   one natural pause. The kept ranges are on video frames. The audio is
    spliced in a streaming pass, and ffmpeg then trims the video, stacks the
    cameras, adds intro/outro and encodes, all in one pass with a progress bar.
 
 Re-running `transcribe` reuses the cached recognition (`work/whisper-*.json`),
-so trying new `--min-quiet`/`--quiet-db` values is quick.
+so trying new `--min-quiet`/`--quiet-db` values is quick. If you have already
+edited `transcript.md`, your deletions are kept and only the `‿` marks are
+updated. Spelling fixes are reset, and the previous file is saved in `work/`.
+A different `--model`, `--language` or set of input files would change the
+words themselves. That is refused up front unless you pass `--force`.
 
 ## Limitations
 
 - Only words can be cut. A cough, or an "um" that Whisper didn't write down,
   can't be removed from the text. Use `--max-gap` for long silences.
 - Whisper's word timings are approximate (often ±0.1 s). The quiet-point
-  search tolerates that. If a cut clips a word, raise `--min-quiet`.
+  search tolerates that, and caps any "word" longer than 1.2 s so a stretched
+  ending can't hide the pause after it. If a cut clips a word, raise
+  `--min-quiet`.
+- Crosstalk still shows as many short paragraphs, one each time the speaker
+  changes.
+- Rendering decodes every camera at full size, even for footage that's cut.
+  Very long recordings with thousands of cuts render more slowly (see the
+  `select` cost in the code).
 - Repeated identical words in one paragraph ("I I think") can't be told apart
   by text. Either copy may be the one removed. That's normally harmless.
 

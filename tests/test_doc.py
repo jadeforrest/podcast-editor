@@ -4,7 +4,8 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from podedit import align
-from podedit.doc import GLUE, diff_edit, display_text, paragraph_starts, parse_markdown, render_markdown, timestamp
+from podedit.doc import (GLUE, diff_edit, display_text, edited_tokens, header_stamps, paragraph_starts,
+                         render_markdown, timestamp)
 from podedit.text import norm
 from tests.conftest import clean_cut, make_words
 
@@ -53,17 +54,18 @@ def test_render_layout():
 @given(transcripts())
 def test_parse_inverts_render(t):
     """Property: reading back an untouched transcript gives exactly the word tokens."""
-    assert parse_markdown(render_markdown(t, "T")) == [display_text(w) for w in t["words"]]
+    assert edited_tokens(render_markdown(t, "T")) == [display_text(w) for w in t["words"]]
 
 
 def edited_md(t, drop, drop_headers=False):
     """The markdown a user would get by deleting the words in `drop` (and emptied speaker lines)."""
     words = t["words"]
     out = []
-    starts = set(paragraph_starts(words))
+    starts = paragraph_starts(words)
+    stamps = dict(zip(starts, header_stamps(words, starts)))
     for i, w in enumerate(words):
-        if i in starts:
-            out.append(f"\n**{w['speaker']}** [{timestamp(w['start'])}]\n")
+        if i in stamps:
+            out.append(f"\n**{w['speaker']}** [{stamps[i]}]\n")
         if i not in drop:
             out.append(display_text(w) + " ")
     md = "".join(out)
@@ -172,7 +174,7 @@ def test_opcodes_are_a_valid_exact_diff(a, b):
 
 def test_parse_ignores_headers_comments_titles():
     md = "# Title\n<!-- delete me\nstill comment -->\n**jade** [00:00:01]\nhello‿there  friend\n\n"
-    assert parse_markdown(md) == ["hello", "there", "friend"]
+    assert edited_tokens(md) == ["hello", "there", "friend"]
 
 
 def test_deleting_whole_paragraph():
@@ -200,3 +202,33 @@ def test_paragraph_breaks():
     assert starts[:2] == [0, 2]  # 2.5 s pause
     assert 2 + 80 in starts      # sentence end after the soft limit
     assert any(s - starts[k - 1] == 200 for k, s in enumerate(starts) if k)  # hard limit
+
+
+def test_lines_starting_with_hash_are_speech():
+    t = transcript_from(["#1", "is", "great"], ["jade"] * 3, [False] * 3)
+    md = render_markdown(t, "Title")
+    assert edited_tokens(md) == ["#1", "is", "great"]
+    assert diff_edit(t["words"], md).deleted == set()
+    assert edited_tokens("# Title\n## Sub\n**jade** [00:00:00]\n# not a heading here\n") == \
+        ["#", "not", "a", "heading", "here"]
+
+
+def test_crosstalk_headers_are_unique_anchors():
+    """Two paragraphs by one speaker in the same second: deleting the first keeps the second's words."""
+    t = transcript_from(["yeah", "no", "yeah", "sure"], ["jade", "alice", "jade", "alice"], [False] * 4)
+    for k, w in enumerate(t["words"]):
+        w["start"], w["end"] = 10 + k * 0.3, 10.2 + k * 0.3
+    md = render_markdown(t, "T")
+    assert "**jade** [00:00:10.0]" in md and "**jade** [00:00:10.6]" in md
+    md = md.replace("**jade** [00:00:10.0]\nyeah\n", "")
+    assert diff_edit(t["words"], md).deleted == {0}
+
+
+@given(transcripts(), st.data())
+def test_rerender_with_omit_preserves_edit(t, data):
+    """Property: re-rendering with the user's deletions omitted reads back as the same deletions."""
+    n = len(t["words"])
+    drop = data.draw(st.sets(st.integers(0, max(0, n - 1)), max_size=n)) if n else set()
+    got = diff_edit(t["words"], render_markdown(t, "T", omit=drop)).deleted
+    kept = lambda gone: [norm(display_text(w)) for i, w in enumerate(t["words"]) if i not in gone]  # noqa: E731
+    assert len(got) == len(drop) and kept(got) == kept(drop)  # repeated words may swap copies

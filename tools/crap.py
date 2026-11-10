@@ -1,7 +1,9 @@
 """Per-function CRAP scores: complexity^2 * (1 - coverage)^3 + complexity.
 
-Usage: .venv/bin/python -m pytest --cov=podedit --cov-branch --cov-report=json:work-coverage.json
-       .venv/bin/python tools/crap.py work-coverage.json [threshold]
+Coverage per function = covered (lines + branch arcs) / all (lines + branch arcs) in it.
+
+Usage: .venv/bin/python -m pytest --cov=podedit --cov-branch --cov-report=json:coverage.json
+       .venv/bin/python tools/crap.py coverage.json [threshold]
 """
 import json
 import sys
@@ -15,9 +17,12 @@ def main(cov_path: str, threshold: float = 12.0) -> int:
     rows = []
     for fname, data in files.items():
         executed, missing = set(data["executed_lines"]), set(data["missing_lines"])
+        hit_arcs = [a for a, _ in data.get("executed_branches", [])]
+        miss_arcs = [a for a, _ in data.get("missing_branches", [])]
         for fn in lizard.analyze_file(fname).function_list:
             lines = set(range(fn.start_line, fn.end_line + 1))
-            run, miss = len(lines & executed), len(lines & missing)
+            run = len(lines & executed) + sum(a in lines for a in hit_arcs)
+            miss = len(lines & missing) + sum(a in lines for a in miss_arcs)
             cov = run / (run + miss) if run + miss else 1.0
             cc = fn.cyclomatic_complexity
             rows.append((cc * cc * (1 - cov) ** 3 + cc, cc, cov, f"{fname}:{fn.start_line} {fn.name}"))

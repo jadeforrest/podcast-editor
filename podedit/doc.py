@@ -19,6 +19,7 @@ from .text import norm
 GLUE = "‿"  # ‿ joins words that cannot be cut apart
 HEADER = re.compile(r"^\*\*(?P<speaker>[^*]+)\*\*\s*\[(?P<ts>[\d:.]+)\]\s*$")
 SPLIT = re.compile(rf"[\s{GLUE}]+")
+TITLE = re.compile(r"^#{1,6}(\s|$)")
 
 PREAMBLE = f"""<!--
 HOW TO EDIT
@@ -38,6 +39,11 @@ HOW TO EDIT
 def timestamp(seconds: float) -> str:
     s = int(seconds)
     return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
+
+
+def precise_timestamp(seconds: float) -> str:
+    tenths = int(seconds * 10)
+    return f"{timestamp(tenths / 10)}.{tenths % 10}"
 
 
 def display_text(word: dict) -> str:
@@ -67,37 +73,35 @@ def paragraph_starts(words: list[dict]) -> list[int]:
     return starts
 
 
-def render_markdown(transcript: dict, title: str) -> str:
+def header_stamps(words: list[dict], starts: list[int]) -> list[str]:
+    """Paragraph timestamps; when a speaker has two paragraphs in the same second
+    (crosstalk), both get tenths so every speaker line is a unique anchor."""
+    plain = [(words[s]["speaker"], timestamp(words[s]["start"])) for s in starts]
+    counts: dict[tuple[str, str], int] = {}
+    for key in plain:
+        counts[key] = counts.get(key, 0) + 1
+    return [precise_timestamp(words[s]["start"]) if counts[key] > 1 else key[1]
+            for s, key in zip(starts, plain)]
+
+
+def render_markdown(transcript: dict, title: str, omit: set[int] | frozenset = frozenset()) -> str:
+    """The editable transcript; words in `omit` (already deleted by the user) are left out."""
     words, cuts = transcript["words"], transcript["cuts"]
     lines = [f"# {title}", "", PREAMBLE]
-    para = ""
-    new_para = set(paragraph_starts(words))
-    for i, w in enumerate(words):
-        if i in new_para:
-            if para:
-                lines += [para.rstrip(), ""]
-            lines.append(f"**{w['speaker']}** [{timestamp(w['start'])}]")
-            para = ""
-        glued = i + 1 < len(words) and cuts[i + 1] is None
-        para += display_text(w) + (GLUE if glued else " ")
-    if para:
-        lines += [para.rstrip(), ""]
+    starts = paragraph_starts(words)
+    bounds = starts + [len(words)]
+    for k, stamp in enumerate(header_stamps(words, starts)):
+        shown = [i for i in range(bounds[k], bounds[k + 1]) if i not in omit]
+        if not shown:
+            continue
+        text = "".join(display_text(words[i]) + (GLUE if i + 1 < len(words) and cuts[i + 1] is None else " ")
+                       for i in shown)
+        lines += [f"**{words[shown[0]]['speaker']}** [{stamp}]", text.rstrip(), ""]
     return "\n".join(lines)
 
 
 def strip_comments(md: str) -> str:
     return re.sub(r"<!--.*?-->", " ", md, flags=re.S)
-
-
-def parse_markdown(md: str) -> list[str]:
-    """The words left in an edited transcript, in order."""
-    tokens: list[str] = []
-    for line in strip_comments(md).splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or HEADER.match(stripped):
-            continue
-        tokens += [t for t in SPLIT.split(stripped) if t]
-    return tokens
 
 
 @dataclass
@@ -114,10 +118,6 @@ def ignored_text(kind: str, words: list[dict], new: list[str]) -> str:
     return f"{where}reworded text kept with original audio: {old!r} -> {' '.join(new)!r}"
 
 
-def header_key(speaker: str, start: float) -> tuple[str, str]:
-    return speaker.strip(), timestamp(start)
-
-
 def parse_paragraphs(md: str) -> list[tuple[tuple[str, str] | None, list[str]]]:
     """(speaker-line key, tokens) per paragraph; key None for text before any speaker line."""
     paras: list[tuple[tuple[str, str] | None, list[str]]] = [(None, [])]
@@ -126,9 +126,15 @@ def parse_paragraphs(md: str) -> list[tuple[tuple[str, str] | None, list[str]]]:
         header = HEADER.match(stripped)
         if header:
             paras.append(((header["speaker"].strip(), header["ts"]), []))
-        elif stripped and not stripped.startswith("#"):
+        elif stripped and not (len(paras) == 1 and TITLE.match(stripped)):
+            # A markdown heading is only the title before the first speaker line; later,
+            # a line starting with "#" is speech (Whisper writes "#1", "#hashtag").
             paras[-1][1].extend(t for t in SPLIT.split(stripped) if t)
     return paras
+
+
+def edited_tokens(md: str) -> list[str]:
+    return [t for _, tokens in parse_paragraphs(md) for t in tokens]
 
 
 def segments(words: list[dict], md: str) -> list[tuple[int, int, list[str]]]:
@@ -139,7 +145,7 @@ def segments(words: list[dict], md: str) -> list[tuple[int, int, list[str]]]:
     the paragraphs between two surviving speaker lines).
     """
     starts = paragraph_starts(words)
-    keys = [header_key(words[s]["speaker"], words[s]["start"]) for s in starts]
+    keys = [(words[s]["speaker"], stamp) for s, stamp in zip(starts, header_stamps(words, starts))]
     anchors: list[tuple[int, list[str]]] = [(0, [])]
     last = -1
     for key, tokens in parse_paragraphs(md):

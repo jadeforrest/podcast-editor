@@ -76,6 +76,7 @@ def plan_deletions(words: list[dict], cuts: list, deleted: set[int]) -> Plan:
 
 
 def run_removal(i: int, j: int, cuts: list, duration: float, max_gap: float | None) -> Interval:
+    """Cut times are frame boundaries already (see analysis.cut_dict), so snapping keeps them exact."""
     last = len(cuts) - 2
     a = 0.0 if i == 0 else cuts[i]["t"]
     b = duration if j == last else cuts[j + 1]["t"]

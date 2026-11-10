@@ -11,13 +11,16 @@ is marked as not cuttable.
 from __future__ import annotations
 
 import bisect
+import math
 from dataclasses import dataclass
+from fractions import Fraction
 
 import numpy as np
 
 from .text import norm
 
 FRAME = 0.01  # seconds per analysis frame
+MAX_WORD = 1.2  # seconds; Whisper sometimes stretches a word's end across the following pause
 
 
 def frame_db(samples: np.ndarray, rate: int, frame: float = FRAME) -> np.ndarray:
@@ -68,8 +71,16 @@ def best_quiet(starts: np.ndarray, ends: np.ndarray, lo: int, hi: int, min_frame
     return best
 
 
-def cut_dict(qs: float, qe: float) -> dict:
-    return {"t": round((qs + qe) / 2, 3), "qs": round(qs, 3), "qe": round(qe, 3)}
+def cut_dict(qs: float, qe: float, grid: Fraction | None = None) -> dict | None:
+    """A cut in the middle of a quiet stretch. With a frame grid, the cut must be a frame
+    boundary inside the stretch (video can only be cut there); None if there is none."""
+    t = (qs + qe) / 2
+    if grid is not None:
+        k = round(t * grid)  # nearest boundary to the middle: inside whenever any boundary is
+        if not math.ceil(qs * grid - 1e-9) <= k <= math.floor(qe * grid + 1e-9):
+            return None
+        t = float(Fraction(k) / grid)
+    return {"t": t if grid is not None else round(t, 3), "qs": round(qs, 3), "qe": round(qe, 3)}
 
 
 def boundary_windows(words: list[dict], duration: float, slack: float) -> list[tuple[float, float]]:
@@ -81,12 +92,14 @@ def boundary_windows(words: list[dict], duration: float, slack: float) -> list[t
         hi = duration if i == len(words) else min(duration, words[i]["start"] + slack)
         windows.append((lo, hi))
         if i < len(words):
-            max_end = max(max_end, words[i]["end"])
+            # Cap implausibly long words so a stretched end doesn't hide the pause after it;
+            # the energy check still refuses to cut while anyone is actually talking.
+            max_end = max(max_end, min(words[i]["end"], words[i]["start"] + MAX_WORD))
     return windows
 
 
 def compute_cuts(words: list[dict], mix_db: np.ndarray, duration: float, threshold: float,
-                 min_quiet: float = 0.04, slack: float = 0.1) -> list[dict | None]:
+                 min_quiet: float = 0.04, slack: float = 0.1, grid: Fraction | None = None) -> list[dict | None]:
     """One entry per boundary: cuts[i] is before words[i]; cuts[len(words)] is after the last word."""
     starts, ends = quiet_runs(mix_db < threshold)
     min_frames = max(1, int(round(min_quiet / FRAME)))
@@ -94,8 +107,9 @@ def compute_cuts(words: list[dict], mix_db: np.ndarray, duration: float, thresho
     windows = boundary_windows(words, duration, slack)
     for i, (lo, hi) in enumerate(windows):
         q = best_quiet(starts, ends, int(lo / FRAME), int(np.ceil(hi / FRAME)), min_frames)
-        if q is not None:
-            cuts.append(cut_dict(q[0] * FRAME, min(q[1] * FRAME, duration)))
+        cut = cut_dict(q[0] * FRAME, min(q[1] * FRAME, duration), grid) if q is not None else None
+        if cut is not None:
+            cuts.append(cut)
         elif i == 0:
             cuts.append(cut_dict(0.0, 0.0))
         elif i == len(words):

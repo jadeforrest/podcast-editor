@@ -75,10 +75,10 @@ def test_overlapping_speaker_blocks_cut():
     # B talks over the gap in A's speech; the long B word ends after A's next word starts
     audio = tone(2.0)
     db = analysis.frame_db(audio, RATE)
-    words = [word("a", 0.0, 0.5), word("bbb", 0.4, 1.8, "guest"), word("c", 1.0, 1.5)]
+    words = [word("a", 0.0, 0.5), word("bbb", 0.4, 1.55, "guest"), word("c", 1.0, 1.5)]
     assert analysis.compute_cuts(words, db, 2.0, -40)[2] is None
     windows = analysis.boundary_windows(words, 2.0, 0.1)
-    assert windows[3][0] >= 1.7  # window after "c" starts after the longest word so far ends
+    assert windows[3][0] >= 1.45  # window after "c" starts after the longest word so far ends
 
 
 def test_filter_drops_silent_and_bleed():
@@ -98,3 +98,35 @@ def test_filter_drops_silent_and_bleed():
 def test_peak_db_out_of_range():
     assert analysis.peak_db(np.zeros(3, np.float32), 10.0, 11.0) == -100.0
     assert FRAME == 0.01
+
+
+def test_cuts_land_on_frame_boundaries_inside_quiet():
+    from fractions import Fraction
+    grid = Fraction(24)
+    c = analysis.cut_dict(1.0, 1.05, grid)                 # contains 25/24 = 1.0417
+    assert c["t"] == float(Fraction(25, 24)) and 1.0 <= c["t"] <= 1.05
+    assert analysis.cut_dict(1.005, 1.035, grid) is None    # 30 ms of quiet between two frame boundaries
+    assert analysis.cut_dict(1.005, 1.035)["t"] == 1.02     # fine without a grid (unit use)
+
+
+@given(st.floats(0, 100), st.floats(0.001, 1), st.sampled_from([24, 25, 30, 60, 1000]))
+def test_grid_cut_property(qs, width, rate):
+    """Property: a grid cut is a frame boundary inside the quiet stretch, and exists whenever one does."""
+    import math
+    from fractions import Fraction
+    grid = Fraction(rate)
+    c = analysis.cut_dict(qs, qs + width, grid)
+    exists = math.ceil(qs * rate - 1e-9) <= math.floor((qs + width) * rate + 1e-9)
+    assert (c is not None) == exists
+    if c:
+        assert qs - 1e-6 <= c["t"] <= qs + width + 1e-6
+        assert abs(c["t"] * rate - round(c["t"] * rate)) < 1e-6
+
+
+def test_stretched_whisper_end_does_not_hide_a_pause():
+    # "so" really ends at 0.6 s, but Whisper says 3.0 s; the 2 s pause after it is real silence
+    audio = np.concatenate([tone(0.6), silence(2.0), tone(0.5), silence(0.2)])
+    db = analysis.frame_db(audio, RATE)
+    words = [word("so", 0.0, 3.0), word("anyway", 2.6, 3.1)]
+    cuts = analysis.compute_cuts(words, db, 3.3, threshold=-40)
+    assert cuts[1] is not None and 1.2 <= cuts[1]["t"] <= 2.6

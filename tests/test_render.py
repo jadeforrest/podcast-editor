@@ -47,7 +47,7 @@ def test_plan_edit_cuts_and_problems():
 
 
 def test_fps_and_samples():
-    assert rnd.video_fps({"tracks": AUDIO_ONLY}) == 30
+    assert rnd.video_fps({"tracks": AUDIO_ONLY}) is None
     assert rnd.video_fps({"tracks": CAMS + [{**CAMS[0], "fps": "30000/1001"}]}) == Fraction(30000, 1001)
     assert rnd.sample_ranges([(0, 25), (50, 75)], Fraction(25)) == [(0, 48000), (96000, 144000)]
 
@@ -161,3 +161,69 @@ def test_render_switches_to_whoever_is_talking(tmp_path, media_dir):
                      fast=False, min_shot=1.0)
     assert plan.shots == [(0, 0), (55, 1)]
     assert not frame_top_is_black(out, 1.0) and frame_top_is_black(out, 3.0)
+
+
+def test_big_cuts_need_confirmation():
+    t = transcript(CAMS, duration=4.0)
+    md = md_without(t, "**b** [00:00:02]\nyes")
+    t["duration"] = 2000.0  # the deleted final paragraph now runs ~33 minutes to the end
+    plan = rnd.plan_edit(t, md)
+    assert any("to the end" in p.message and "cut off" in p.message for p in plan.problems)
+    assert any("removes 100%" in p.message for p in plan.problems)
+    assert not rnd.plan_edit(t, md, allow_big_cut=True).problems
+    t["duration"] = 4.0
+    assert not rnd.plan_edit(t, md_without(t, "um ")).problems
+
+
+def test_audio_only_cuts_on_a_millisecond_grid():
+    t = transcript(AUDIO_ONLY)
+    plan = rnd.plan_edit(t, md_without(t, "um "))
+    assert plan.fps == rnd.AUDIO_GRID and plan.video_fps == 30
+    assert plan.frames == [(900, 4000)]
+
+
+def test_canvas_is_the_biggest_camera_and_camera_implies_single():
+    portrait = {**CAMS[0], "name": "phone", "width": 1080, "height": 1920}
+    landscape = {**CAMS[0], "name": "cam", "width": 1280, "height": 720}
+    assert rnd.canvas_size([landscape, portrait], None) == (1080, 1920)
+    assert rnd.choose_cameras(CAMS, "speaker", "b") == CAMS[1:]
+
+
+def av_offsets(path, n_events):
+    """Times of white flashes and of beep onsets in a rendered file."""
+    import subprocess
+
+    import numpy as np
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vf", "scale=8:8", "-f", "rawvideo",
+                          "-pix_fmt", "gray", "pipe:1"], check=True, capture_output=True).stdout
+    lum = np.frombuffer(raw, np.uint8).reshape(-1, 64).mean(axis=1)
+    fps = float(probe(path).fps)
+    flashes = [i / fps for i in range(len(lum)) if lum[i] > 128 and (i == 0 or lum[i - 1] <= 128)]
+    pcm = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-ac", "1", "-ar", "48000", "-f", "f32le",
+                          "pipe:1"], check=True, capture_output=True).stdout
+    a = np.abs(np.frombuffer(pcm, np.float32))
+    loud = a > 0.2
+    onsets, last = [], -1.0
+    for i in np.flatnonzero(loud):
+        if i / 48000 - last > 0.3:
+            onsets.append(i / 48000)
+        last = i / 48000
+    return flashes[:n_events], onsets[:n_events]
+
+
+def test_av_sync_survives_many_cuts(tmp_path, media_dir):
+    """Cut out several arbitrary stretches; every flash must still coincide with its beep."""
+    ep, _ = setup_episode(tmp_path, media_dir, [], ["sync.mp4"])
+    track = {"name": "sync", "file": "input/sync.mp4", "has_video": True, "has_audio": True,
+             "width": 160, "height": 120, "fps": "25"}
+    # words between the beeps, with clean cuts in the silent parts
+    words = make_words([("sync", f"w{k}", k + 0.3, k + 0.7) for k in range(6)])
+    cuts = [clean_cut(0, 0)] + [clean_cut(k + 0.85, 0.1) for k in range(5)] + [clean_cut(6.0, 0)]
+    t = {"duration": 6.0, "tracks": [track], "words": words, "cuts": cuts, "dropped": []}
+    plan = rnd.plan_edit(t, md_without(t, "w1", "w3", "w4"))
+    assert plan.deleted == 3
+    out = rnd.render(ep, t, plan, layout="speaker", camera=None, intro=None, outro=None, cover=None, fast=False)
+    flashes, beeps = av_offsets(out, 3)
+    assert len(flashes) >= 2 and len(beeps) >= 2
+    for f, b in zip(flashes, beeps):
+        assert abs(f - b) < 0.045, (flashes, beeps)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 
 from . import render as rnd
@@ -17,7 +18,12 @@ def load(ep: Episode) -> tuple[dict, str]:
     return json.loads(ep.transcript_json.read_text()), ep.transcript_md.read_text()
 
 
+NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
 def cmd_new(args) -> int:
+    if not NAME.match(args.episode):
+        raise SystemExit("Episode names may use letters, digits, '.', '_' and '-' (e.g. 2026-11-10-alice-smith).")
     ep = Episode(EPISODES / args.episode)
     ep.create()
     print(f"Created {ep.root}\nDrop the recordings (one file per person, e.g. jade.mp4, guest.mp4) into:\n  {ep.input_dir}")
@@ -30,6 +36,7 @@ def cmd_transcribe(args) -> int:
 
     ep = resolve_episode(args.episode)
     ep.work_dir.mkdir(parents=True, exist_ok=True)
+    tr.check_before_run(ep, args.model, args.language or None, args.force)
     transcript = tr.build(ep, model=args.model, language=args.language or None,
                           min_quiet=args.min_quiet, quiet_db=args.quiet_db)
     tr.write_outputs(ep, transcript, force=args.force)
@@ -51,7 +58,8 @@ def report(plan: rnd.EditPlan, duration: float) -> None:
 def plan_from(args) -> tuple[Episode, dict, rnd.EditPlan]:
     ep = resolve_episode(args.episode)
     transcript, md = load(ep)
-    plan = rnd.plan_edit(transcript, md, keep_unclean=args.keep_unclean, max_gap=args.max_gap)
+    plan = rnd.plan_edit(transcript, md, keep_unclean=args.keep_unclean, max_gap=args.max_gap,
+                         allow_big_cut=args.allow_big_cut)
     report(plan, transcript["duration"])
     return ep, transcript, plan
 
@@ -100,6 +108,8 @@ def edit_options(p: argparse.ArgumentParser) -> None:
                    help="leave in deleted words that can't be cut cleanly instead of stopping")
     p.add_argument("--max-gap", type=float, metavar="SECONDS",
                    help="also shorten every pause longer than this (e.g. 1.0)")
+    p.add_argument("--allow-big-cut", action="store_true",
+                   help="allow removing over half the episode, or a long stretch at the end")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -116,7 +126,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--language", default="en", help="language code, or '' to auto-detect")
     p.add_argument("--min-quiet", type=float, default=0.04, help="shortest pause (s) that allows a clean cut")
     p.add_argument("--quiet-db", type=float, help="override the auto-detected quiet level (dBFS)")
-    p.add_argument("--force", action="store_true", help="overwrite an edited transcript.md")
+    p.add_argument("--force", action="store_true",
+                   help="start transcript.md afresh, discarding edits (not needed just to change --min-quiet/--quiet-db)")
     p.set_defaults(func=cmd_transcribe)
 
     p = sub.add_parser("check", help="show what the edited transcript will cut, and any problems")
@@ -128,7 +139,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--layout", choices=["speaker", "side-by-side", "single"], default="speaker",
                    help="speaker: show whoever is talking (default); side-by-side: all cameras at once; "
                         "single: one camera throughout")
-    p.add_argument("--camera", help="with --layout single: which track's video to use")
+    p.add_argument("--camera", help="show only this person's camera (implies --layout single)")
     p.add_argument("--min-shot", type=float, default=2.0, metavar="SECONDS",
                    help="with --layout speaker: shortest time on one camera before switching (default 2)")
     p.add_argument("--no-intro", action="store_true")

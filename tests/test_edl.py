@@ -90,3 +90,4 @@ def test_snap_to_frames(raw, fps):
 def test_snap_merges_touching():
     assert edl.snap_to_frames([(0, 1.0), (1.01, 2.0)], Fraction(30)) == [(0, 60)]
     assert edl.snap_to_frames([(0, 0.001)], Fraction(30)) == []
+
