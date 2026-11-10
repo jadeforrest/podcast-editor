@@ -17,7 +17,8 @@ from . import align
 from .text import norm
 
 GLUE = "‿"  # ‿ joins words that cannot be cut apart
-HEADER = re.compile(r"^\*\*(?P<speaker>[^*]+)\*\*\s*\[(?P<ts>[\d:.]+)\]\s*$")
+# The name is anything (file stems may contain "*", "]"...); the line must end in "** [time]".
+HEADER = re.compile(r"^\*\*(?P<speaker>.+?)\*\*\s*\[(?P<ts>[\d:.]+)\]\s*$")
 SPLIT = re.compile(rf"[\s{GLUE}]+")
 TITLE = re.compile(r"^#{1,6}(\s|$)")
 
@@ -145,7 +146,7 @@ def segments(words: list[dict], md: str) -> list[tuple[int, int, list[str]]]:
     the paragraphs between two surviving speaker lines).
     """
     starts = paragraph_starts(words)
-    keys = [(words[s]["speaker"], stamp) for s, stamp in zip(starts, header_stamps(words, starts))]
+    keys = [(words[s]["speaker"].strip(), stamp) for s, stamp in zip(starts, header_stamps(words, starts))]
     anchors: list[tuple[int, list[str]]] = [(0, [])]
     last = -1
     for key, tokens in parse_paragraphs(md):

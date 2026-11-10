@@ -221,6 +221,7 @@ words themselves. That is refused up front unless you pass `--force`.
 .venv/bin/python -m pytest                                    # fast pass (~10 s, uses real ffmpeg)
 .venv/bin/python -m pytest --cov=podedit --cov-branch --cov-report=json:coverage.json \
   && .venv/bin/python tools/crap.py coverage.json             # CRAP <= 12 per function
+HYPOTHESIS_PROFILE=fuzz .venv/bin/python -m pytest              # slow pass: 20k examples per property (~15 min)
 ```
 
 Code is in `podedit/`: `transcribe` (recognition + analysis), `analysis` (cut

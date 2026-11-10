@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from dataclasses import dataclass
 from fractions import Fraction
@@ -47,11 +48,17 @@ def parse_rate(rate: str | None) -> Fraction | None:
     return standard_rate(r) if 0 < r <= 240 else None
 
 
-def start_time(stream: dict | None) -> float:
+def finite(value) -> float:
+    """A number from ffprobe, or 0 for missing, 'N/A', nan or inf."""
     try:
-        return float(stream.get("start_time", 0) or 0) if stream else 0.0
-    except ValueError:
+        x = float(value or 0)
+    except (TypeError, ValueError):
         return 0.0
+    return x if math.isfinite(x) else 0.0
+
+
+def start_time(stream: dict | None) -> float:
+    return finite(stream.get("start_time")) if stream else 0.0
 
 
 def parse_probe(path: Path, data: dict) -> Probe:
@@ -59,7 +66,7 @@ def parse_probe(path: Path, data: dict) -> Probe:
     video = next((s for s in streams if s.get("codec_type") == "video"
                   and not s.get("disposition", {}).get("attached_pic")), None)
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
-    duration = float(data.get("format", {}).get("duration") or 0.0)
+    duration = finite(data.get("format", {}).get("duration"))
     if video is None:
         return Probe(path, duration, audio is not None, False)
     fps = parse_rate(video.get("avg_frame_rate")) or parse_rate(video.get("r_frame_rate"))

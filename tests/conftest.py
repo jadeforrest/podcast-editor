@@ -1,8 +1,15 @@
+import os
 import json
 import subprocess
 from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, settings
+
+# Slow pass: HYPOTHESIS_PROFILE=fuzz runs every property test as a long fuzz campaign.
+settings.register_profile("fuzz", max_examples=20_000, deadline=None,
+                          suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large])
+settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
 
 def make_words(spec):
