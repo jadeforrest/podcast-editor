@@ -227,3 +227,33 @@ def test_av_sync_survives_many_cuts(tmp_path, media_dir):
     assert len(flashes) >= 2 and len(beeps) >= 2
     for f, b in zip(flashes, beeps):
         assert abs(f - b) < 0.045, (flashes, beeps)
+
+
+def mean_luma(path, t):
+    import subprocess
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", str(t), "-i", str(path), "-frames:v", "1", "-vf", "scale=8:8",
+                          "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"], check=True, capture_output=True).stdout
+    return sum(raw) / len(raw)
+
+
+def test_audio_only_render_shows_the_cover(tmp_path, media_dir):
+    """Mutation gap: the cover picture's input options were never exercised by a real render."""
+    ep, t = setup_episode(tmp_path, media_dir, AUDIO_ONLY, ["c.wav"])
+    plan = rnd.plan_edit(t, md_without(t, "um "))
+    out = rnd.render(ep, t, plan, layout="speaker", camera=None, intro=None, outro=None,
+                     cover=media_dir / "cover.png", fast=False)
+    p = probe(out)
+    assert abs(p.duration - plan.kept_seconds) < 0.1 and mean_luma(out, plan.kept_seconds / 2) > 100  # letterboxed white square; black is 16
+
+
+def test_cut_audio_fades_at_every_splice(tmp_path, media_dir):
+    """Mutation gap: a continuous tone cut in two must dip to silence at the splice (no click)."""
+    import numpy as np
+    ep, t = setup_episode(tmp_path, media_dir, AUDIO_ONLY, ["c.wav"])
+    plan = rnd.plan_edit(t, md_without(t, "the‿car"))  # keeps 0-0.9 s and 2.1-4 s
+    dest = ep.work_dir / "a.f32"
+    rnd.cut_audio(ep, t, plan, dest, normalize=False)
+    a = np.fromfile(dest, np.float32).reshape(-1, 2)[:, 0]
+    k = rnd.sample_ranges(plan.frames, plan.fps)[0][1] - rnd.sample_ranges(plan.frames, plan.fps)[0][0]
+    assert len(plan.frames) == 2 and len(a) == sum(b - a_ for a_, b in rnd.sample_ranges(plan.frames, plan.fps))
+    assert np.abs(a[k - 2:k + 2]).max() < 0.01 < np.abs(a[k - 2000:k - 1000]).max()

@@ -1,4 +1,7 @@
+from fractions import Fraction
+
 import numpy as np
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -130,3 +133,33 @@ def test_stretched_whisper_end_does_not_hide_a_pause():
     words = [word("so", 0.0, 3.0), word("anyway", 2.6, 3.1)]
     cuts = analysis.compute_cuts(words, db, 3.3, threshold=-40)
     assert cuts[1] is not None and 1.2 <= cuts[1]["t"] <= 2.6
+
+
+def test_bleed_is_caught_on_the_first_track_too():
+    """Mutation gap: the bleed check must look at every other track, not stop at its own."""
+    jade, guest = tone(1.0, 0.01), tone(1.0, 0.3)  # jade's mic only faintly picked up guest's "hello"
+    dbs = {"jade": analysis.frame_db(jade, RATE), "guest": analysis.frame_db(guest, RATE)}
+    kept, dropped = analysis.filter_words(
+        {"jade": [word("Hello", 0.1, 0.5)], "guest": [word("hello", 0.1, 0.5, "guest")]}, dbs)
+    assert [w["speaker"] for w in kept] == ["guest"] and [(w["speaker"], w["reason"]) for w in dropped] == \
+        [("jade", "bleed")]
+
+
+def test_windows_allow_slack_around_word_timings():
+    words = [word("a", 0.5, 0.6), word("b", 2.0, 2.5)]
+    got = analysis.boundary_windows(words, 3.0, 0.1)
+    assert got == [(0.0, pytest.approx(0.6)), (pytest.approx(0.5), pytest.approx(2.1)), (pytest.approx(2.4), 3.0)]
+
+
+def test_compute_cuts_uses_the_grid_and_min_quiet():
+    db = np.full(300, -10.0, dtype=np.float32)
+    db[100:130] = -80.0   # 0.3 s pause after "a"
+    db[200:202] = -80.0   # 0.02 s gap after "b": shorter than min_quiet
+    words = [word("a", 0.2, 0.9), word("b", 1.4, 1.95), word("c", 2.1, 2.8)]
+    cuts = analysis.compute_cuts(words, db, 3.0, -40.0, min_quiet=0.04, grid=Fraction(25))
+    assert cuts[1] is not None and abs(cuts[1]["t"] * 25 - round(cuts[1]["t"] * 25)) < 1e-9 and cuts[1]["t"] != 1.15
+    assert cuts[2] is None
+
+
+def test_cut_dict_keeps_the_quiet_stretch():
+    assert analysis.cut_dict(1.00049, 1.2004) == {"t": 1.1, "qs": 1.0, "qe": 1.2}

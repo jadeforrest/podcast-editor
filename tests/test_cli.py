@@ -1,5 +1,6 @@
 import json
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -200,3 +201,37 @@ def test_transcribe_helpers(media_dir):
     s = transcribe.summary({"words": [1], "tracks": [1], "dropped": [], "cuts": [{}, None, {}, {}]})
     assert "1 of 2 word boundaries (50%)" in s
     assert "0 of 0" in transcribe.summary({"words": [], "tracks": [1], "dropped": [], "cuts": [{}]})
+
+
+def test_probe_reads_offsets_rates_and_defaults():
+    """Mutation gaps: the A/V offset's sign with a non-zero video start, and which frame rate wins."""
+    data = {"streams": [{"codec_type": "video", "avg_frame_rate": "30000/1001", "r_frame_rate": "60/1",
+                         "start_time": "0.5", "width": 640, "height": 360},
+                        {"codec_type": "audio", "start_time": "0.62"}], "format": {"duration": "10"}}
+    p = parse_probe(Path("x.mp4"), data)
+    assert (p.fps, p.audio_offset, p.duration, p.width, p.height) == (Fraction(30000, 1001), 0.12, 10.0, 640, 360)
+    data["streams"][0]["avg_frame_rate"] = "0/0"
+    assert parse_probe(Path("x.mp4"), data).fps == 60
+    bare = parse_probe(Path("x.mp4"), {"streams": [{"codec_type": "video"}]})
+    assert (bare.duration, bare.width, bare.height, bare.audio_offset, bare.has_audio) == (0.0, 0, 0, 0.0, False)
+    assert parse_probe(Path("a.wav"), {"streams": [{"codec_type": "audio"}]}).has_video is False
+    assert start_time({}) == 0.0 and start_time(None) == 0.0
+    assert parse_rate("1/2") == 1 and parse_rate("240") == 240 and parse_rate("241") is None
+
+
+def test_track_grouping_and_length_checks():
+    from podedit.media import AUDIO_GRID, Probe
+    cam = lambda name: Probe(Path(f"input/{name}.mp4"), 4.0, True, True, 320, 240, Fraction(25))  # noqa: E731
+    mic = Probe(Path("input/jade.wav"), 5.5, True, False)
+    assert transcribe.cut_grid([mic]) == AUDIO_GRID and transcribe.cut_grid([mic, cam("jade")]) == 25
+    with pytest.raises(SystemExit):
+        transcribe.audio_sources([cam("jade"), cam("jade")])
+    assert transcribe.check_lengths([cam("jade"), mic]) == [
+        "tracks differ in length by 1.5s; they should all be from the same session and start together"]
+    assert transcribe.check_lengths([cam("jade"), cam("alice")]) == []
+
+
+def test_summary_counts_glued_boundaries():
+    t = {"words": [1, 2, 3, 4], "cuts": [{}, None, {}, {}, {}], "tracks": [1, 2], "dropped": [1]}
+    assert transcribe.summary(t) == ("4 words from 2 track(s); 1 of 3 word boundaries (33%) can't be cut "
+                                     "cleanly; 1 likely bleed/hallucinated words dropped.")

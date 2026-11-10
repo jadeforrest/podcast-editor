@@ -91,3 +91,11 @@ def test_snap_merges_touching():
     assert edl.snap_to_frames([(0, 1.0), (1.01, 2.0)], Fraction(30)) == [(0, 60)]
     assert edl.snap_to_frames([(0, 0.001)], Fraction(30)) == []
 
+
+
+def test_max_gap_shortens_every_pause_except_around_a_deletion():
+    """Mutation gap: only the two cut points bounding a deleted run are left to run_removal."""
+    words, cuts = words_and_cuts([False] * 7)  # 8 words, 0.5 s pauses
+    got = edl.gap_removals(cuts, [(3, 3)], 0.2)
+    shortened = sorted(round((a + b) / 2, 3) for a, b in got)
+    assert shortened == [0.75, 1.75, 4.75, 5.75, 6.75]  # pauses before w1, w2, w5, w6, w7 (not w3, w4)

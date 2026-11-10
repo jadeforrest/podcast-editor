@@ -55,3 +55,14 @@ def test_shot_invariants(raw, min_shot):
     assert all(got[k][1] != got[k + 1][1] for k in range(len(got) - 1))
     assert all(got[k + 1][0] - got[k][0] >= round(min_shot * FPS) for k in range(len(got) - 1))
     assert all(0 <= cam < 3 for _, cam in got)
+
+
+def test_output_frames_accumulate_over_several_kept_spans():
+    """Mutation gap: each kept span starts where the previous ones end on the edited timeline."""
+    got = shots.to_output_frames([(0.0, 100.0)], [(0, 10), (20, 30), (40, 50)], Fraction(1))
+    assert got == [(0, 10), (10, 20), (20, 30)]
+    assert shots.to_output_frames([(15.0, 15.0)], [(0, 30)], Fraction(1)) == []
+
+
+def test_crop_expression_when_the_last_shot_is_a_later_camera():
+    assert shots.crop_x_expr([(0, 1), (50, 2)], 100, 80) == "100*between(n,0,49)+200*between(n,50,79)"
