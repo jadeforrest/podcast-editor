@@ -19,6 +19,15 @@ def test_clock_maps_across_cuts():
     assert clock.word({"start": 1.95, "end": 2.4}) == 1.0       # starts just before its span: clamped
     assert clock.word({"start": 4.0, "end": 4.2}) is None       # past the end
     assert timeline.Clock([], FPS).word({"start": 0.0, "end": 0.1}) is None
+    assert clock.word({"start": 0.9, "end": 1.1}) is None       # midpoint exactly on a span's end: cut
+    assert clock.word({"start": 1.9, "end": 2.1}) == 1.0        # ...and exactly on a span's start: kept
+
+
+def test_render_exact_layout():
+    t = transcript(CAMS)
+    assert timeline.render(t, [(0, 100)], FPS, "ep") == (
+        "# ep\n\nTimes are positions in the rendered video (no intro).\n\n"
+        "**a** [00:00:00]\num the car\n\n**b** [00:00:02]\nyes\n")
 
 
 def test_render_drops_cut_words_and_adds_intro():
@@ -79,7 +88,7 @@ def test_check_writes_timeline_with_intro(make_episode, media_dir, monkeypatch, 
     assert cli.main(["check", str(ep.root)]) == 0
     assert str(ep.output_transcript) in capsys.readouterr().out
     md = ep.output_transcript.read_text()
-    assert "**a** [00:00:01]\nthe car" in md and "including a 1.0s intro" in md
+    assert md.startswith("# ep\n") and "**a** [00:00:01]\nthe car" in md and "including a 1.0s intro" in md
     assert cli.main(["check", str(ep.root), "--no-intro"]) == 0
     assert "**a** [00:00:00]\nthe car" in ep.output_transcript.read_text()
 
