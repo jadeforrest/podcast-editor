@@ -8,6 +8,7 @@ import re
 import sys
 
 from . import render as rnd
+from . import timeline
 from .doc import timestamp
 from .paths import EPISODES, TEMPLATES, Episode, find_template, find_tracks, resolve_episode
 
@@ -64,13 +65,24 @@ def plan_from(args) -> tuple[Episode, dict, rnd.EditPlan]:
     return ep, transcript, plan
 
 
-def cmd_check(args) -> int:
-    _, _, plan = plan_from(args)
-    return 1 if plan.problems else 0
-
-
 def segment(ep: Episode, stem: str, disabled: bool):
     return None if disabled else find_template(ep, stem)
+
+
+def write_timeline(ep: Episode, transcript: dict, plan: rnd.EditPlan, intro) -> None:
+    """The kept words, stamped with their time in the rendered video (for show notes and chapters)."""
+    offset = rnd.load_segment(intro).probe.duration if intro else 0.0
+    ep.output_dir.mkdir(exist_ok=True)
+    ep.output_transcript.write_text(timeline.render(transcript, plan.frames, plan.fps, ep.name, offset))
+    print(f"Edited transcript with video times: {ep.output_transcript}")
+
+
+def cmd_check(args) -> int:
+    ep, transcript, plan = plan_from(args)
+    if plan.problems:
+        return 1
+    write_timeline(ep, transcript, plan, segment(ep, "intro", args.no_intro))
+    return 0
 
 
 def cmd_render(args) -> int:
@@ -80,6 +92,7 @@ def cmd_render(args) -> int:
               "suggested larger phrase), or re-run with --keep-unclean to leave them in.", file=sys.stderr)
         return 1
     intro, outro = segment(ep, "intro", args.no_intro), segment(ep, "outro", args.no_outro)
+    write_timeline(ep, transcript, plan, intro)
     cover = find_template(ep, "cover")
     for label, path in (("intro", intro), ("outro", outro)):
         print(f"{label}: {path or 'none'}")
@@ -111,6 +124,8 @@ def edit_options(p: argparse.ArgumentParser) -> None:
                    help="also shorten every pause longer than this (e.g. 1.0)")
     p.add_argument("--allow-big-cut", action="store_true",
                    help="allow removing over half the episode, or a long stretch at the end")
+    p.add_argument("--no-intro", action="store_true",
+                   help="no intro clip (also: video times in output/<episode>.transcript.md start at the episode)")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -143,7 +158,6 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--camera", help="show only this person's camera (implies --layout single)")
     p.add_argument("--min-shot", type=float, default=2.0, metavar="SECONDS",
                    help="with --layout speaker: shortest time on one camera before switching (default 2)")
-    p.add_argument("--no-intro", action="store_true")
     p.add_argument("--no-outro", action="store_true")
     p.add_argument("--no-normalize", action="store_true",
                    help="mix everyone at their recorded level instead of evening out their speech levels")

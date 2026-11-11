@@ -5,7 +5,7 @@
         transcript.md     the editable transcript (the only file you edit)
         intro.* outro.*   optional per-episode overrides of templates/
         work/             generated data: timings, caches, scratch audio
-        output/           the rendered <episode>.mp4
+        output/           the rendered <episode>.mp4, and <episode>.transcript.md on its clock
     templates/intro.*, templates/outro.*, templates/cover.*   shared defaults
 """
 
@@ -59,6 +59,10 @@ class Episode:
     @property
     def output_mp4(self) -> Path:
         return self.output_dir / f"{self.name}.mp4"
+
+    @property
+    def output_transcript(self) -> Path:
+        return self.output_dir / f"{self.name}.transcript.md"
 
     def create(self) -> None:
         for d in (self.input_dir, self.work_dir, self.output_dir):

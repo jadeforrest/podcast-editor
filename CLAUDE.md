@@ -13,5 +13,7 @@ Transcript-driven podcast video editor. User docs: README.md (workflow, folder c
   (`transcribe.audio_sources`). Audio/video start-time offsets are compensated via `media.offset_filter`.
 - Default `speaker` layout: cameras are fit to the canvas and hstacked into a strip; after the frame `select`, a
   `crop` whose x is a per-frame expression of `n` picks the camera (`shots.crop_x_expr`). Shots are in output frames.
+- `check`/`render` also write `output/<episode>.transcript.md`: kept words timed on the rendered video's clock
+  (intro included) via `timeline.Clock`, for show notes/chapters. transcript.md times stay original-recording times.
 - Tests: `.venv/bin/python -m pytest` (uses real ffmpeg on tiny lavfi media; Whisper is faked). CRAP gate: `tools/crap.py` (see README).
 - Never commit anything under `episodes/` or `templates/` (media; git-ignored).

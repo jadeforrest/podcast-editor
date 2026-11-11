@@ -32,6 +32,7 @@ episodes/<episode>/
     cover.png           optional: picture for audio-only episodes
     work/               generated: timings, recognition cache, temp files
     output/<episode>.mp4
+    output/<episode>.transcript.md   generated: the kept words, timed to the video
 templates/
     intro.*  outro.*  cover.*   shared defaults, used when present
 ```
@@ -119,6 +120,22 @@ Give it `transcript.md` along with something like:
 Then run `./pod check`, because LLMs sometimes reword things, and check will
 list that.
 
+### Show notes and YouTube chapters
+
+When there are no problems, `check` and `render` also write
+`output/<episode>.transcript.md`: only the words that survive your edits, with
+each speaker line stamped with where it plays in the **rendered video**, intro
+included (`check --no-intro` if you won't use one). The times in
+`transcript.md` are the original recording's and drift further off with every
+cut, so write chapters from this file instead. Give it to an LLM with
+something like:
+
+> This is the transcript of an episode of my podcast. Each `**name** [time]`
+> line shows where that paragraph starts in the final video. Write a one-paragraph
+> episode description in my voice, covering the main topics, and 8–14 YouTube
+> chapters as `MM:SS Title`, the first at `00:00`, each starting at the speaker
+> line where its topic begins.
+
 ## Options worth knowing
 
 | Option | What it does |
@@ -133,6 +150,7 @@ list that.
 | `transcribe --language ''` | Auto-detect the language (default `en`) |
 | `transcribe --min-quiet 0.03` | Shortest pause (s) that counts as a clean cut point. Lower means more cuttable, with more risk of a clipped word |
 | `transcribe --quiet-db -45` | Override the auto-detected "quiet" level |
+| `check --no-intro` | Time `output/<episode>.transcript.md` without the intro clip |
 | `render --allow-big-cut` | Allow removing over half the episode, or a long stretch at the end |
 | `transcribe --force` | Start `transcript.md` afresh, discarding your edits. Not needed just to change `--min-quiet`/`--quiet-db` |
 
