@@ -17,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 EPISODES = ROOT / "episodes"
 TEMPLATES = ROOT / "templates"
+SHOW_NOTES_PROMPT = ROOT / "prompts" / "show-notes.md"
 
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 AUDIO_EXT = {".wav", ".aif", ".aiff", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".aac"}

@@ -52,6 +52,7 @@ def test_render_command(make_episode, media_dir, monkeypatch, capsys):
     assert cli.main(["render", str(ep.root), "--no-outro", "--max-gap", "1"]) == 0
     out = capsys.readouterr().out
     assert "intro: " + str(ep.root / "intro.mp4") in out and "outro: none" in out
+    assert str(paths.SHOW_NOTES_PROMPT) in out and paths.SHOW_NOTES_PROMPT.is_file()
     assert ep.output_mp4.is_file() and ep.output_transcript.is_file()
 
 

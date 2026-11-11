@@ -10,7 +10,7 @@ import sys
 from . import render as rnd
 from . import timeline
 from .doc import timestamp
-from .paths import EPISODES, TEMPLATES, Episode, find_template, find_tracks, resolve_episode
+from .paths import EPISODES, SHOW_NOTES_PROMPT, TEMPLATES, Episode, find_template, find_tracks, resolve_episode
 
 
 def load(ep: Episode) -> tuple[dict, str]:
@@ -100,6 +100,8 @@ def cmd_render(args) -> int:
                      cover=cover, fast=args.fast, min_shot=args.min_shot,
                      normalize=not args.no_normalize)
     print(f"Done: {out}")
+    print(f"Then: get the episode description and YouTube chapters by giving an LLM\n"
+          f"  {ep.output_transcript}\nwith the prompt in {SHOW_NOTES_PROMPT}")
     return 0
 
 

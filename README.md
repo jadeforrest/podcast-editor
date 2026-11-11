@@ -16,6 +16,8 @@ cutting and encoding with ffmpeg). Nothing is uploaded anywhere.
 # 4. edit episodes/2026-11-10-alice-smith/transcript.md (by hand or with an LLM)
 ./pod check 2026-11-10-alice-smith        # 5. see what will be cut, and anything that can't be
 ./pod render 2026-11-10-alice-smith       # 6. writes output/2026-11-10-alice-smith.mp4
+# 7. give an LLM output/2026-11-10-alice-smith.transcript.md with prompts/show-notes.md
+#    to get the episode description and YouTube chapters
 ```
 
 `./pod status` lists episodes and how far along each is. Every command takes
@@ -127,14 +129,11 @@ When there are no problems, `check` and `render` also write
 each speaker line stamped with where it plays in the **rendered video**, intro
 included (`check --no-intro` if you won't use one). The times in
 `transcript.md` are the original recording's and drift further off with every
-cut, so write chapters from this file instead. Give it to an LLM with
-something like:
-
-> This is the transcript of an episode of my podcast. Each `**name** [time]`
-> line shows where that paragraph starts in the final video. Write a one-paragraph
-> episode description in my voice, covering the main topics, and 8–14 YouTube
-> chapters as `MM:SS Title`, the first at `00:00`, each starting at the speaker
-> line where its topic begins.
+cut, so write chapters from this file instead. Give it to an LLM along with
+[`prompts/show-notes.md`](prompts/show-notes.md), which asks for a
+one-paragraph episode description in the host's voice and 8–14 YouTube
+chapters, each at the speaker line where its topic begins. `render` prints
+both paths when it finishes. Edit the prompt to change the show name or style.
 
 ## Options worth knowing
 
