@@ -25,6 +25,15 @@ def ffmpeg(*args):
     subprocess.run(["ffmpeg", "-v", "error", "-y", *args], check=True)
 
 
+@pytest.fixture(autouse=True)
+def _temp_data_home(tmp_path, monkeypatch):
+    """No test may read or write the real episodes/ or templates/."""
+    from podedit import cli, paths
+    for mod in (paths, cli):
+        monkeypatch.setattr(mod, "EPISODES", tmp_path / "_home" / "episodes")
+        monkeypatch.setattr(mod, "TEMPLATES", tmp_path / "_home" / "templates")
+
+
 @pytest.fixture
 def make_episode(tmp_path):
     """Write an episode dir with given transcript dict and (optionally) markdown."""

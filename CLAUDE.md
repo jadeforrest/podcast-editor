@@ -16,4 +16,5 @@ Transcript-driven podcast video editor. User docs: README.md (workflow, folder c
 - `check`/`render` also write `output/<episode>.transcript.md`: kept words timed on the rendered video's clock
   (intro included) via `timeline.Clock`, for show notes/chapters. transcript.md times stay original-recording times.
 - Tests: `.venv/bin/python -m pytest` (uses real ffmpeg on tiny lavfi media; Whisper is faked). CRAP gate: `tools/crap.py` (see README).
-- Never commit anything under `episodes/` or `templates/` (media; git-ignored).
+- Media lives outside the repo: `$PODEDIT_HOME` (default `~/Movies/podcast-editor`) holds `episodes/` and `templates/`
+  (`paths.data_home`). Tests get a temp home from an autouse fixture in `tests/conftest.py`; never point a test at the real one.

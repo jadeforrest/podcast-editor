@@ -5,8 +5,6 @@ __pycache__/
 .coverage
 coverage.json
 
-# Media and per-episode data are never committed
-episodes/*
-!episodes/README.md
-templates/*
-!templates/README.md
+# Media lives in $PODEDIT_HOME (default ~/Movies/podcast-editor); never commit it here
+/episodes/
+/templates/

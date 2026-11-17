@@ -236,3 +236,22 @@ def test_summary_counts_glued_boundaries():
     t = {"words": [1, 2, 3, 4], "cuts": [{}, None, {}, {}, {}], "tracks": [1, 2], "dropped": [1]}
     assert transcribe.summary(t) == ("4 words from 2 track(s); 1 of 3 word boundaries (33%) can't be cut "
                                      "cleanly; 1 likely bleed/hallucinated words dropped.")
+
+
+def test_data_home(monkeypatch):
+    assert paths.data_home({"PODEDIT_HOME": "/x/pod"}) == Path("/x/pod")
+    assert paths.data_home({"PODEDIT_HOME": "~/pod"}) == Path.home() / "pod"
+    assert paths.data_home({}) == Path.home() / "Movies" / "podcast-editor"
+    assert paths.data_home({"PODEDIT_HOME": ""}) == Path.home() / "Movies" / "podcast-editor"
+    monkeypatch.setenv("PODEDIT_HOME", "/from/env")
+    assert paths.data_home() == Path("/from/env")
+
+
+def test_find_template_reads_templates_at_call_time(tmp_path, monkeypatch):
+    ep = Episode(tmp_path / "ep")
+    ep.create()
+    tpl = tmp_path / "tpl"
+    tpl.mkdir()
+    (tpl / "outro.mp4").write_bytes(b"")
+    monkeypatch.setattr(paths, "TEMPLATES", tpl)
+    assert find_template(ep, "outro") == tpl / "outro.mp4"

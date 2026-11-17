@@ -1,5 +1,7 @@
 """Episode directory convention.
 
+Media lives outside the repo, in $PODEDIT_HOME (default ~/Movies/podcast-editor):
+
     episodes/<episode>/
         input/            drop the source tracks here (one file per person)
         transcript.md     the editable transcript (the only file you edit)
@@ -11,12 +13,24 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-EPISODES = ROOT / "episodes"
-TEMPLATES = ROOT / "templates"
+
+
+def data_home(env: Mapping[str, str] | None = None) -> Path:
+    """Where episodes/ and templates/ live: $PODEDIT_HOME, else ~/Movies/podcast-editor."""
+    env = os.environ if env is None else env
+    if env.get("PODEDIT_HOME"):
+        return Path(env["PODEDIT_HOME"]).expanduser()
+    return Path.home() / "Movies" / "podcast-editor"
+
+
+EPISODES = data_home() / "episodes"
+TEMPLATES = data_home() / "templates"
 SHOW_NOTES_PROMPT = ROOT / "prompts" / "show-notes.md"
 
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
@@ -95,6 +109,7 @@ def find_named(dirs: list[Path], stem: str, exts: set[str]) -> Path | None:
     return None
 
 
-def find_template(ep: Episode, stem: str, templates: Path = TEMPLATES) -> Path | None:
+def find_template(ep: Episode, stem: str, templates: Path | None = None) -> Path | None:
+    templates = TEMPLATES if templates is None else templates
     exts = IMAGE_EXT if stem == "cover" else MEDIA_EXT
     return find_named([ep.root, templates], stem, exts)

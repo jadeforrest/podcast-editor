@@ -11,9 +11,9 @@ cutting and encoding with ffmpeg). Nothing is uploaded anywhere.
 
 ```bash
 ./pod new 2026-11-10-alice-smith          # 1. make the episode folder
-# 2. drop the recordings into episodes/2026-11-10-alice-smith/input/
+# 2. drop the recordings into ~/Movies/podcast-editor/episodes/2026-11-10-alice-smith/input/
 ./pod transcribe 2026-11-10-alice-smith   # 3. writes transcript.md
-# 4. edit episodes/2026-11-10-alice-smith/transcript.md (by hand or with an LLM)
+# 4. edit ~/Movies/podcast-editor/episodes/2026-11-10-alice-smith/transcript.md (by hand or with an LLM)
 ./pod check 2026-11-10-alice-smith        # 5. see what will be cut, and anything that can't be
 ./pod render 2026-11-10-alice-smith       # 6. writes output/2026-11-10-alice-smith.mp4
 # 7. give an LLM output/2026-11-10-alice-smith.transcript.md with prompts/show-notes.md
@@ -25,6 +25,10 @@ cutting and encoding with ffmpeg). Nothing is uploaded anywhere.
 speech model (about 1.6 GB), once.
 
 ## Folder convention
+
+Episodes and templates live outside the repo, in `~/Movies/podcast-editor/`
+(set `PODEDIT_HOME` to use another folder). `./pod status` prints where.
+A command also accepts a path to an episode folder instead of its name.
 
 ```
 episodes/<episode>/
@@ -39,7 +43,6 @@ templates/
     intro.*  outro.*  cover.*   shared defaults, used when present
 ```
 
-Everything under `episodes/` and `templates/` is ignored by git (except the READMEs).
 
 **Input files.** Name each one after the person (`jade.mp4`, `alice.mp4`): the
 file name, without its extension, becomes the speaker name in the transcript.
